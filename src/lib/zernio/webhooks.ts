@@ -17,7 +17,6 @@ export const CRM_WEBHOOK_EVENTS: WebhookEventName[] = [
   "message.delivered",
   "message.read",
   "message.failed",
-  "conversation.started",
   "referral.received",
   "account.connected",
   "account.disconnected",
