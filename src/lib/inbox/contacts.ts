@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import type { Db } from "@/db";
+import type { DbExecutor as Db } from "@/db";
 import { contactIdentities, contacts, type Channel } from "@/db/schema";
 
 export type IdentityInput = {

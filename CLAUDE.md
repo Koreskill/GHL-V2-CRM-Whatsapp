@@ -45,6 +45,13 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - **Barridos de recuperación** (`GET /api/webhooks/zernio` y backfill) aceptan `Authorization: Bearer <CRON_SECRET>` o header `x-cron-secret`. En Dokploy se programan con su Scheduler (cada 30 min alcanza: es red de seguridad).
 - Iconos de marca (WhatsApp/Instagram/Messenger) como **SVG inline**.
 
+## Base de datos
+
+- La app se conecta como rol `crm_app` (pooler de transacciones `aws-0-sa-east-1`, puerto 6543, usuario `crm_app.pryrsnqxhmpnolxlupna`). Solo tiene DML sobre las 7 tablas del CRM, vía políticas RLS `crm_app_all`. No puede hacer DDL.
+- Las migraciones (`drizzle/`) las aplica el rol dueño (MCP de Supabase o `postgres`), y cada una se registra en `drizzle.__drizzle_migrations` con su hash sha256 y `when` del journal. Toda tabla nueva necesita GRANT + política para `crm_app`.
+- La ingesta de cada evento corre en UNA transacción: si falla, no queda un mensaje insertado sin sus contadores. Las fechas dentro de `sql\`\`` van como `${d.toISOString()}::timestamptz`, nunca un `Date` crudo.
+- `legacy_conversations` / `legacy_messages` son de un bot anterior; se pueden borrar.
+
 ## Zernio: mapeo de ids (verificado contra el OpenAPI 1.62.0)
 
 - Tipos generados en `src/lib/zernio/openapi.d.ts` desde `openapi/zernio.slim.json` (`npm run zernio:openapi`). Nunca editarlos a mano.

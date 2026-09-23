@@ -15,6 +15,13 @@
       "when": 1790187055647,
       "tag": "0001_enable_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790189126898,
+      "tag": "0002_crm_app_role",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,8 @@ import postgres from "postgres";
 import * as schema from "./schema";
 
 export type Db = PostgresJsDatabase<typeof schema>;
+export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+export type DbExecutor = Db | Tx;
 
 const globalForDb = globalThis as unknown as { db?: Db };
 

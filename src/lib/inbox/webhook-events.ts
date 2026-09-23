@@ -24,11 +24,15 @@ export async function processEvent(
   payload: ZernioWebhookPayload,
 ): Promise<IngestResult | null> {
   try {
-    const result = await ingestZernioEvent(db, payload);
-    await db
-      .update(webhookEvents)
-      .set({ processedAt: sql`now()`, error: result.kind === "ignored" ? result.reason : null })
-      .where(eq(webhookEvents.eventId, eventId));
+    // Todo o nada: si algo falla, el mensaje tampoco queda insertado y el barrido lo reintenta completo.
+    const result = await db.transaction(async (tx) => {
+      const r = await ingestZernioEvent(tx, payload);
+      await tx
+        .update(webhookEvents)
+        .set({ processedAt: sql`now()`, error: r.kind === "ignored" ? r.reason : null })
+        .where(eq(webhookEvents.eventId, eventId));
+      return r;
+    });
     if (result.kind === "ignored") console.warn(`[zernio] evento ${eventId} ignorado: ${result.reason}`);
     return result;
   } catch (err) {

@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import type { Db } from "@/db";
+import type { DbExecutor as Db } from "@/db";
 import { channelAccounts, conversations, messages, type Channel } from "@/db/schema";
 import { isCrmChannel } from "@/lib/zernio/accounts";
 import type {
@@ -141,13 +141,14 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
 
   // Contadores solo si el mensaje es nuevo: reprocesar un evento no puede sumar dos veces.
   if (inserted) {
+    const at = sql`${sentAt.toISOString()}::timestamptz`;
     await db
       .update(conversations)
       .set({
-        lastMessageAt: sql`greatest(${conversations.lastMessageAt}, ${sentAt})`,
+        lastMessageAt: sql`greatest(${conversations.lastMessageAt}, ${at})`,
         ...(inbound
           ? {
-              lastInboundAt: sql`greatest(${conversations.lastInboundAt}, ${sentAt})`,
+              lastInboundAt: sql`greatest(${conversations.lastInboundAt}, ${at})`,
               unreadCount: sql`${conversations.unreadCount} + 1`,
             }
           : {}),
