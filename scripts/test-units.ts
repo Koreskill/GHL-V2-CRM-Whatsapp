@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "../src/lib/agent/config";
+import { roleOf } from "../src/lib/auth";
 import { computeWindow } from "../src/lib/inbox/window";
+import { renderTemplate, templateParamCount } from "../src/lib/zernio/templates";
 
 const H = 3_600_000;
 const now = Date.parse("2026-09-23T12:00:00Z");
@@ -43,5 +45,19 @@ const nothing = mergeAgentConfig(undefined, undefined);
 assert.equal(nothing.enabled, false, "canal sin fila arranca apagado");
 assert.equal(nothing.systemPrompt, DEFAULT_SYSTEM_PROMPT);
 assert.deepEqual(nothing.tools, ["handoff_to_human"]);
+
+// Plantillas: Meta devuelve BODY en mayúsculas; las variables pueden repetirse o traer espacios.
+const tpl = { components: [{ type: "HEADER", text: "{{9}}" }, { type: "BODY", text: "Hola {{1}}, tu visita es el {{ 2 }}. Gracias {{1}}" }] };
+assert.equal(templateParamCount(tpl), 2, "cuenta el máximo {{n}} del cuerpo, ignora el header");
+assert.equal(renderTemplate(tpl, ["Ana", "lunes"]), "Hola Ana, tu visita es el lunes. Gracias Ana");
+assert.equal(templateParamCount({ components: [{ type: "body", text: "Sin variables" }] }), 0);
+assert.equal(templateParamCount({ components: undefined }), 0);
+
+// Roles: solo app_metadata.crm_role cuenta; user_metadata lo puede editar el propio usuario.
+assert.equal(roleOf({ app_metadata: { crm_role: "admin" } }), "admin");
+assert.equal(roleOf({ app_metadata: { crm_role: "agent" } }), "agent");
+assert.equal(roleOf({ app_metadata: { crm_role: "superadmin" } }), null, "rol desconocido no entra");
+assert.equal(roleOf({ app_metadata: {} }), null, "registrado sin rol no entra");
+assert.equal(roleOf(null), null);
 
 console.log("units: OK");

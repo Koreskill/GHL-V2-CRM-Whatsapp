@@ -70,7 +70,7 @@ function initials(value: string) {
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
 }
 
-export function Sidebar({ user }: { user: { email: string; name?: string | null } }) {
+export function Sidebar({ user }: { user: { email: string; name?: string | null; role: "admin" | "agent" } }) {
   const pathname = usePathname();
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -100,10 +100,12 @@ export function Sidebar({ user }: { user: { email: string; name?: string | null 
       </nav>
 
       <div className="mt-4 flex flex-col gap-3 border-t border-white/5 pt-4">
-        <NavLink
-          item={{ href: "/configuracion", label: "Configuración", icon: Settings }}
-          active={isActive("/configuracion")}
-        />
+        {user.role === "admin" && (
+          <NavLink
+            item={{ href: "/configuracion", label: "Configuración", icon: Settings }}
+            active={isActive("/configuracion")}
+          />
+        )}
         <div className="flex items-center gap-3 rounded-lg px-3 py-2">
           <span className="relative grid size-8 shrink-0 place-items-center rounded-full bg-shell-active text-[12px] font-semibold text-shell-text">
             {initials(user.name ?? user.email)}

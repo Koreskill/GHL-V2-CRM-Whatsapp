@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Bot, Check, CheckCheck, Clock, FileText, Pause, Play, SendHorizontal } from "lucide-react";
 import { CHANNEL_META } from "@/components/channel-icons";
@@ -9,10 +8,12 @@ import { dayOf, formatDayDivider, formatRemaining, formatTime } from "@/lib/form
 import type { ChatMessage, ConversationDetail } from "@/lib/inbox/queries";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
+import { TemplatePicker } from "./template-picker";
 
 const POLL_MS = 4000;
 
 type LocalMessage = ChatMessage & { local?: true };
+type OutgoingPayload = { text: string } | { template: { name: string; language: string; params: string[] }; preview: string };
 
 export function ChatView({ conversation, messages }: { conversation: ConversationDetail; messages: ChatMessage[] }) {
   const router = useRouter();
@@ -47,13 +48,13 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
     if (el) el.scrollTop = el.scrollHeight;
   }, [all.length]);
 
-  async function send(text: string) {
+  async function send(payload: OutgoingPayload) {
     const tempId = `tmp-${crypto.randomUUID()}`;
     const optimistic: LocalMessage = {
       id: tempId,
       direction: "outbound",
-      type: "text",
-      body: text,
+      type: "template" in payload ? "template" : "text",
+      body: "template" in payload ? payload.preview : payload.text,
       status: "pending",
       error: null,
       sentAt: new Date().toISOString(),
@@ -65,7 +66,11 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
     const res = await fetch("/api/messages/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationId: conversation.id, text }),
+      body: JSON.stringify(
+        "template" in payload
+          ? { conversationId: conversation.id, template: payload.template }
+          : { conversationId: conversation.id, text: payload.text },
+      ),
     }).catch(() => null);
     const data = res ? await res.json().catch(() => null) : null;
 
@@ -169,6 +174,11 @@ function Bubble({ message: m }: { message: LocalMessage }) {
             <Bot className="size-3" /> Agente IA
           </span>
         )}
+        {m.type === "template" && (
+          <span className={cn("mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide", out ? "text-white/70" : "text-muted")}>
+            <FileText className="size-3" /> Plantilla
+          </span>
+        )}
         <p className="break-words whitespace-pre-wrap">{text}</p>
         <span className={cn("mt-0.5 flex items-center justify-end gap-1 text-[10.5px]", out && m.status !== "failed" ? "text-white/70" : "text-muted")}>
           {formatTime(m.sentAt)}
@@ -192,26 +202,38 @@ function StatusIcon({ status }: { status: string }) {
   return null;
 }
 
-function Composer({ conversation, onSend }: { conversation: ConversationDetail; onSend: (text: string) => void }) {
+function Composer({ conversation, onSend }: { conversation: ConversationDetail; onSend: (payload: OutgoingPayload) => void }) {
   const [text, setText] = useState("");
+  const [picking, setPicking] = useState(false);
   const { state, expiresAt } = conversation.window;
   const blocked = state === "template_only" || state === "closed";
+  const canTemplate = conversation.channel === "whatsapp";
 
   function submit() {
     const value = text.trim();
     if (!value || blocked) return;
     setText("");
-    onSend(value);
+    onSend({ text: value });
   }
 
   return (
     <div className="shrink-0 border-t border-line bg-card px-6 py-4">
-      {state === "template_only" && (
+      {picking && (
+        <TemplatePicker
+          conversationId={conversation.id}
+          onClose={() => setPicking(false)}
+          onSend={(template, preview) => {
+            setPicking(false);
+            onSend({ template, preview });
+          }}
+        />
+      )}
+      {state === "template_only" && !picking && (
         <Notice>
           Pasaron más de 24 h desde el último mensaje del cliente. En WhatsApp solo se puede escribir con una{" "}
-          <Link href="/plantillas" className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
+          <button onClick={() => setPicking(true)} className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline">
             <FileText className="size-3.5" /> plantilla aprobada
-          </Link>
+          </button>
           .
         </Notice>
       )}
@@ -238,6 +260,16 @@ function Composer({ conversation, onSend }: { conversation: ConversationDetail; 
           placeholder={blocked ? "No se puede enviar texto libre" : "Escribe un mensaje…"}
           className="max-h-40 min-h-[24px] flex-1 resize-none bg-transparent py-1 text-[13.5px] text-ink placeholder:text-muted focus:outline-none [field-sizing:content]"
         />
+        {canTemplate && (
+          <button
+            onClick={() => setPicking((p) => !p)}
+            aria-label="Enviar plantilla"
+            title="Enviar plantilla de WhatsApp"
+            className="grid size-8 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-card hover:text-ink"
+          >
+            <FileText className="size-4" strokeWidth={1.7} />
+          </button>
+        )}
         <button
           onClick={submit}
           disabled={blocked || !text.trim()}

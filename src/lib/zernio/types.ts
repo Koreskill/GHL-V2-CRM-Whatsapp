@@ -39,6 +39,12 @@ export type CreateWebhookBody = Body<"/v1/webhooks/settings", "post">;
 export type UpdateWebhookBody = Body<"/v1/webhooks/settings", "put">;
 export type WebhookEventName = CreateWebhookBody["events"][number];
 
+export type ListTemplatesQuery = Query<"/v1/whatsapp/templates", "get">;
+export type ListTemplatesResponse = Res200<"/v1/whatsapp/templates", "get">;
+export type WhatsAppTemplate = NonNullable<ListTemplatesResponse["templates"]>[number];
+export type CreateTemplateBody = Body<"/v1/whatsapp/templates", "post">;
+export type CreateTemplateResponse = Res200<"/v1/whatsapp/templates", "post">;
+
 // ---- Webhooks (lo que Zernio nos POSTea). ----
 export type WebhookMessageReceived = Schemas["WebhookPayloadMessage"];
 export type WebhookMessageSent = Schemas["WebhookPayloadMessageSent"];

@@ -1,9 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { roleOf } from "@/lib/auth";
 import { supabaseEnv } from "@/lib/supabase/env";
 
-// Rutas que no exigen sesión: el login y lo que llama Zernio (firmado con HMAC o CRON_SECRET).
-const PUBLIC_PREFIXES = ["/login", "/api/webhooks/", "/webhooks/"];
+// Rutas que no exigen sesión: el login, lo que llama Zernio (firmado con HMAC) y los barridos (CRON_SECRET).
+const PUBLIC_PREFIXES = ["/login", "/api/webhooks/", "/webhooks/", "/api/cron/"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -30,14 +31,19 @@ export async function proxy(request: NextRequest) {
   );
 
   const { data } = await supabase.auth.getUser();
-  if (data.user) return response;
+  // Con sesión pero sin rol (p. ej. alguien que se registró solo en Supabase): no entra.
+  if (data.user && roleOf(data.user)) return response;
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: data.user ? "Sin acceso" : "No autorizado" }, { status: data.user ? 403 : 401 });
   }
   const url = request.nextUrl.clone();
   url.pathname = "/login";
-  url.search = pathname === "/" ? "" : `?next=${encodeURIComponent(pathname + request.nextUrl.search)}`;
+  if (data.user) {
+    url.search = "?error=sin_acceso";
+  } else {
+    url.search = pathname === "/" ? "" : `?next=${encodeURIComponent(pathname + request.nextUrl.search)}`;
+  }
   return NextResponse.redirect(url);
 }
 

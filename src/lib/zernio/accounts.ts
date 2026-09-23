@@ -23,7 +23,7 @@ export async function listAccounts(): Promise<Result<ZernioAccount[]>> {
   }
 }
 
-export function getConnectUrl(platform: ConnectPlatform, redirectUrl: string) {
+export function getConnectUrl(platform: ConnectPlatform, redirectUrl: string, opts: { hostedSignup?: boolean } = {}) {
   const profileId = process.env.ZERNIO_PROFILE_ID;
   if (!profileId) {
     return Promise.resolve<Result<ConnectUrlResponse>>({
@@ -32,7 +32,8 @@ export function getConnectUrl(platform: ConnectPlatform, redirectUrl: string) {
     });
   }
   return zernioRequest<ConnectUrlResponse>("GET", `/v1/connect/${platform}`, {
-    query: { profileId, redirect_url: redirectUrl },
+    // WhatsApp: signup=hosted abre el Embedded Signup de Meta desde una página de Zernio.
+    query: { profileId, redirect_url: redirectUrl, ...(opts.hostedSignup ? { signup: "hosted" } : {}) },
   });
 }
 

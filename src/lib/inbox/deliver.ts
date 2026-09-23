@@ -2,6 +2,7 @@ import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { conversations, messages } from "@/db/schema";
 import { sendMessage } from "@/lib/zernio/inbox";
+import { listTemplates, renderTemplate, templateParamCount } from "@/lib/zernio/templates";
 import type { SendMessageBody } from "@/lib/zernio/types";
 import { computeWindow } from "./window";
 
@@ -19,25 +20,54 @@ export type DeliveredMessage = {
 
 export type DeliverResult =
   | { ok: true; message: DeliveredMessage }
-  | { ok: false; code: "not_found" | "empty" | "window_closed" | "send_failed"; error: string; message?: DeliveredMessage };
+  | { ok: false; code: "not_found" | "empty" | "window_closed" | "send_failed" | "invalid_template"; error: string; message?: DeliveredMessage };
 
 const UNIQUE_VIOLATION = "23505";
+
+export type TemplateInput = { name: string; language: string; params: string[] };
 
 // EL único camino de salida: envía por Zernio Y persiste. Nadie más inserta salientes.
 export async function deliverMessage(
   conversationId: string,
-  input: { text: string; source: DeliverSource },
+  input: { source: DeliverSource } & ({ text: string; template?: undefined } | { template: TemplateInput; text?: undefined }),
 ): Promise<DeliverResult> {
-  const text = input.text.trim();
-  if (!text) return { ok: false, code: "empty", error: "El mensaje está vacío" };
-
   const db = getDb();
   const [conv] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!conv) return { ok: false, code: "not_found", error: "Conversación inexistente" };
 
   const window = computeWindow(conv.channel, conv.lastInboundAt);
+
+  // Plantilla de WhatsApp: vale con la ventana abierta o cerrada. Se valida contra Zernio en el servidor.
+  let text: string;
+  let templatePayload: SendMessageBody["template"] | undefined;
+  if (input.template) {
+    if (conv.channel !== "whatsapp") return { ok: false, code: "invalid_template", error: "Las plantillas son solo para WhatsApp" };
+    if (input.source !== "human") return { ok: false, code: "invalid_template", error: "El agente no envía plantillas" };
+    const { name, language, params } = input.template;
+    const found = await listTemplates({ accountId: conv.accountId, name, language, status: "APPROVED" });
+    const template = found.success ? found.data.templates?.find((t) => t.name === name && t.language === language && t.status === "APPROVED") : undefined;
+    if (!template) return { ok: false, code: "invalid_template", error: "La plantilla no existe o todavía no está aprobada por Meta" };
+    const expected = templateParamCount(template);
+    if (params.length !== expected || params.some((p) => !p.trim())) {
+      return { ok: false, code: "invalid_template", error: `La plantilla necesita ${expected} ${expected === 1 ? "variable" : "variables"} completas` };
+    }
+    text = renderTemplate(template, params);
+    templatePayload = {
+      elements: [
+        {
+          name,
+          language,
+          components: expected ? [{ type: "body", parameters: params.map((p) => ({ type: "text", text: p })) }] : [],
+        },
+      ],
+    };
+  } else {
+    text = input.text.trim();
+    if (!text) return { ok: false, code: "empty", error: "El mensaje está vacío" };
+  }
+
   // El agente IA nunca usa HUMAN_AGENT: Meta lo reserva para personas.
-  const allowed = window.state === "open" || (window.state === "human_agent" && input.source === "human");
+  const allowed = Boolean(templatePayload) || window.state === "open" || (window.state === "human_agent" && input.source === "human");
   if (!allowed) {
     const error =
       window.state === "template_only"
@@ -53,15 +83,17 @@ export async function deliverMessage(
       channel: conv.channel,
       provider: conv.provider,
       direction: "outbound",
-      type: "text",
+      type: templatePayload ? "template" : "text",
       body: text,
       status: "pending",
-      rawPayload: { source: input.source },
+      rawPayload: { source: input.source, ...(input.template ? { template: input.template } : {}) },
     })
     .returning({ id: messages.id, sentAt: messages.sentAt });
 
-  const body: SendMessageBody = { accountId: conv.accountId, message: text };
-  if (window.state === "human_agent") {
+  const body: SendMessageBody = templatePayload
+    ? { accountId: conv.accountId, template: templatePayload }
+    : { accountId: conv.accountId, message: text };
+  if (!templatePayload && window.state === "human_agent") {
     body.messagingType = "MESSAGE_TAG";
     body.messageTag = "HUMAN_AGENT";
   }
@@ -81,7 +113,7 @@ export async function deliverMessage(
   try {
     await db
       .update(messages)
-      .set({ status: "sent", externalId, rawPayload: { source: input.source, response: res.data } })
+      .set({ status: "sent", externalId, rawPayload: { source: input.source, ...(input.template ? { template: input.template } : {}), response: res.data } })
       .where(eq(messages.id, pending.id));
   } catch (err) {
     // El webhook message.sent llegó antes que esta respuesta y ya guardó el mensaje con ese id:

@@ -16,7 +16,8 @@ import { resolveContact } from "./contacts";
 export type IngestResult =
   | { kind: "message"; conversationId: string; messageId: string | null; inbound: boolean; inserted: boolean; sentAt: Date }
   | { kind: "status"; updated: number }
-  | { kind: "account" | "referral" | "test" }
+  | { kind: "account"; accountExternalId: string; status: "connected" | "disconnected" }
+  | { kind: "referral" | "test" }
   | { kind: "ignored"; reason: string };
 
 type WebhookMessage = WebhookMessageReceived["message"] | WebhookMessageSent["message"];
@@ -211,7 +212,7 @@ async function ingestAccount(
       target: channelAccounts.externalId,
       set: { status, name: sql`excluded.name`, handle: sql`excluded.handle`, metadata: sql`${channelAccounts.metadata} || excluded.metadata`, updatedAt: sql`now()` },
     });
-  return { kind: "account" };
+  return { kind: "account", accountExternalId: account.accountId, status };
 }
 
 export async function ingestZernioEvent(db: Db, payload: ZernioWebhookPayload): Promise<IngestResult> {

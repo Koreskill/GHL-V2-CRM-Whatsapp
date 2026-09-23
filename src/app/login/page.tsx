@@ -4,8 +4,15 @@ export const metadata = { title: "Ingresar · Setter CRM" };
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const params = await searchParams;
-  const next = typeof params.next === "string" ? params.next : "/";
-  const failed = params.error === "1";
+  const next = typeof params.next === "string" && params.next.startsWith("/") && !params.next.startsWith("//") ? params.next : "/";
+  const error =
+    params.error === "1"
+      ? "Email o contraseña incorrectos."
+      : params.error === "sin_acceso"
+        ? "Tu usuario no tiene acceso a Setter CRM. Pedile a un administrador que te habilite."
+        : params.error === "limite"
+          ? "Demasiados intentos. Espera unos minutos y vuelve a probar."
+          : null;
 
   return (
     <main className="grid min-h-screen place-items-center bg-canvas px-4">
@@ -47,11 +54,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
             className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[14px] text-ink focus:border-primary focus:outline-none"
           />
 
-          {failed && (
-            <p className="mt-4 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">
-              Email o contraseña incorrectos.
-            </p>
-          )}
+          {error && <p className="mt-4 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</p>}
 
           <button
             type="submit"

@@ -11,6 +11,23 @@ export const dynamic = "force-dynamic";
 const ok = (body: Record<string, unknown> = { ok: true }) => Response.json(body, { status: 200 });
 
 function scheduleAgent(result: IngestResult | null) {
+  if (result?.kind === "account" && result.status === "connected") {
+    const { accountExternalId } = result;
+    after(async () => {
+      // Historial que Zernio ya tenía: se importa sin disparar el agente.
+      const [{ importAccountHistory }, { channelAccounts }, { eq }] = await Promise.all([
+        import("@/lib/inbox/import"),
+        import("@/db/schema"),
+        import("drizzle-orm"),
+      ]);
+      const db = getDb();
+      const [account] = await db.select().from(channelAccounts).where(eq(channelAccounts.externalId, accountExternalId));
+      if (!account) return;
+      const r = await importAccountHistory(db, account).catch((err: unknown) => ({ error: String(err) }));
+      console.log(`[import] ${account.channel}:`, "error" in r ? r.error : `${r.conversations} conversaciones, ${r.messages} mensajes`);
+    });
+    return;
+  }
   if (result?.kind !== "message" || !result.inbound || !result.inserted || !result.messageId) return;
   const { conversationId, messageId } = result;
   after(async () => {

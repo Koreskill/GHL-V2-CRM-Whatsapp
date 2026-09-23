@@ -1,23 +1,76 @@
 import Link from "next/link";
-import { Bot, CheckCircle2, Settings2 } from "lucide-react";
+import { redirect } from "next/navigation";
+import { Bot, CheckCircle2, Link2, Settings2 } from "lucide-react";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
+import { AccountsPanel } from "@/components/settings/accounts-panel";
 import { Button, Card, PageHeader } from "@/components/ui/primitives";
 import { getDb } from "@/db";
-import { agentConfigs } from "@/db/schema";
+import { agentConfigs, channelAccounts } from "@/db/schema";
+import { requireRole } from "@/lib/auth";
 import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "@/lib/agent/config";
 import { TOOL_LABELS, TOOL_NAMES } from "@/lib/agent/tools";
 import { cn } from "@/lib/utils";
 import { saveAgentConfig } from "./actions";
 
-type Tab = "global" | Channel;
-const TABS: Tab[] = ["whatsapp", "instagram", "facebook", "global"];
+type AgentTab = "global" | Channel;
+type Tab = "cuentas" | AgentTab;
+const TABS: Tab[] = ["cuentas", "whatsapp", "instagram", "facebook", "global"];
 
 export default async function ConfiguracionPage({ searchParams }: PageProps<"/configuracion">) {
+  // Solo administradores: la validación es del servidor, no solo ocultar el link del menú.
+  if (!(await requireRole("admin"))) redirect("/");
+
   const params = await searchParams;
-  const tab: Tab = TABS.includes(params.tab as Tab) ? (params.tab as Tab) : "whatsapp";
+  const tab: Tab = TABS.includes(params.tab as Tab) ? (params.tab as Tab) : "cuentas";
   const saved = params.saved === "1";
 
-  const rows = await getDb().select().from(agentConfigs);
+  const db = getDb();
+  const rows = await db.select().from(agentConfigs);
+
+  const tabs = (
+    <div className="mb-5 flex gap-1.5">
+      {TABS.map((t) => {
+        const active = t === tab;
+        const on = rows.find((r) => r.scope === t)?.enabled;
+        const meta = t === "global" || t === "cuentas" ? null : CHANNEL_META[t];
+        const TabIcon = t === "cuentas" ? Link2 : Settings2;
+        return (
+          <Link
+            key={t}
+            href={`/configuracion?tab=${t}`}
+            className={cn(
+              "inline-flex h-9 items-center gap-2 rounded-lg px-3.5 text-[13.5px] font-medium transition-colors",
+              active ? "bg-primary text-white" : "border border-line bg-card text-muted hover:text-ink",
+            )}
+          >
+            {meta ? <meta.Icon className={cn("size-4", active ? "text-white" : meta.color)} /> : <TabIcon className="size-4" strokeWidth={1.7} />}
+            {meta ? `Agente ${meta.label}` : t === "cuentas" ? "Cuentas" : "Agente general"}
+            {meta && <span className={cn("size-1.5 rounded-full", on ? "bg-accent-green" : "bg-muted/40")} />}
+          </Link>
+        );
+      })}
+    </div>
+  );
+
+  if (tab === "cuentas") {
+    const accounts = await db.select().from(channelAccounts).orderBy(channelAccounts.createdAt);
+    return (
+      <>
+        <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />
+        {tabs}
+        <AccountsPanel
+          accounts={accounts.map((a) => ({
+            id: a.id,
+            channel: a.channel,
+            name: a.name,
+            handle: a.handle,
+            status: a.status,
+            historyImportedAt: a.historyImportedAt?.toISOString() ?? null,
+          }))}
+        />
+      </>
+    );
+  }
   const row = rows.find((r) => r.scope === tab);
   const globalRow = rows.find((r) => r.scope === "global");
   const isGlobal = tab === "global";
@@ -30,29 +83,8 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
 
   return (
     <>
-      <PageHeader title="Configuración" subtitle="Agente de IA por canal: prompt, herramientas, modelo e interruptor" />
-
-      <div className="mb-5 flex gap-1.5">
-        {TABS.map((t) => {
-          const active = t === tab;
-          const on = rows.find((r) => r.scope === t)?.enabled;
-          const meta = t === "global" ? null : CHANNEL_META[t];
-          return (
-            <Link
-              key={t}
-              href={`/configuracion?tab=${t}`}
-              className={cn(
-                "inline-flex h-9 items-center gap-2 rounded-lg px-3.5 text-[13.5px] font-medium transition-colors",
-                active ? "bg-primary text-white" : "border border-line bg-card text-muted hover:text-ink",
-              )}
-            >
-              {meta ? <meta.Icon className={cn("size-4", active ? "text-white" : meta.color)} /> : <Settings2 className="size-4" strokeWidth={1.7} />}
-              {meta?.label ?? "General"}
-              {meta && <span className={cn("size-1.5 rounded-full", on ? "bg-accent-green" : "bg-muted/40")} />}
-            </Link>
-          );
-        })}
-      </div>
+      <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />
+      {tabs}
 
       <form action={saveAgentConfig}>
         <input type="hidden" name="scope" value={tab} />

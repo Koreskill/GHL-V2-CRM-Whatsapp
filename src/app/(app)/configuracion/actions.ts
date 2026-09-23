@@ -6,13 +6,13 @@ import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { agentConfigs } from "@/db/schema";
 import { TOOL_NAMES } from "@/lib/agent/tools";
-import { getUser } from "@/lib/supabase/server";
+import { requireRole } from "@/lib/auth";
 
 const SCOPES = new Set(["global", "whatsapp", "instagram", "facebook"]);
 const MODEL_RE = /^[a-zA-Z0-9._:-]{1,80}$/;
 
 export async function saveAgentConfig(formData: FormData) {
-  if (!(await getUser())) redirect("/login");
+  if (!(await requireRole("admin"))) redirect("/");
 
   const scope = String(formData.get("scope") ?? "");
   if (!SCOPES.has(scope)) throw new Error("Pestaña inválida");

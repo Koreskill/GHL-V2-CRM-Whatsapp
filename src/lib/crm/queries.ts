@@ -138,6 +138,32 @@ export async function listActivity(limit = 80): Promise<ActivityItem[]> {
   });
 }
 
+// ---------- Dashboard ----------
+
+export async function getDashboard() {
+  const [row] = await getDb().execute<{
+    contacts: number;
+    contacts_week: number;
+    active: number;
+    unread: number;
+    unread_conversations: number;
+    agent: number;
+    replies: number;
+  }>(sql`
+    select
+      (select count(*)::int from contacts) as contacts,
+      (select count(*)::int from contacts where created_at >= now() - interval '7 days') as contacts_week,
+      (select count(*)::int from conversations where last_message_at >= now() - interval '7 days') as active,
+      (select coalesce(sum(unread_count), 0)::int from conversations) as unread,
+      (select count(*)::int from conversations where unread_count > 0) as unread_conversations,
+      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed'
+         and raw_payload->>'source' = 'agent' and sent_at >= now() - interval '30 days') as agent,
+      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed'
+         and sent_at >= now() - interval '30 days') as replies
+  `);
+  return row;
+}
+
 // ---------- Reportes ----------
 
 export type ReportData = {
