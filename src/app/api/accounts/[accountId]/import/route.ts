@@ -5,7 +5,7 @@ import { channelAccounts } from "@/db/schema";
 import { authorize, isUuid, jsonError } from "@/lib/api";
 
 export async function POST(_req: Request, ctx: RouteContext<"/api/accounts/[accountId]/import">) {
-  const auth = await authorize("admin");
+  const auth = await authorize("admin", { name: "accounts", max: 10, windowMs: 60_000 });
   if ("response" in auth) return auth.response;
 
   const { accountId } = await ctx.params;

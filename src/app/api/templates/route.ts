@@ -6,7 +6,7 @@ import { listTemplates, templateBody, templateParamCount } from "@/lib/zernio/te
 
 // Plantillas aprobadas que se pueden enviar en una conversación de WhatsApp.
 export async function GET(req: Request) {
-  const auth = await authorize();
+  const auth = await authorize("agent", { name: "templates", max: 60, windowMs: 60_000 });
   if ("response" in auth) return auth.response;
 
   const conversationId = new URL(req.url).searchParams.get("conversationId");

@@ -17,7 +17,7 @@ export function Avatar({
   const box = size === "lg" ? "size-10 text-[13px]" : "size-9 text-[12px]";
   return (
     <span className={cn("relative shrink-0", box)}>
-      {picture ? (
+      {picture?.startsWith("https://") ? (
         // eslint-disable-next-line @next/next/no-img-element -- URL externa del proveedor, sin optimizar
         <img src={picture} alt="" className={cn("rounded-full object-cover", box)} referrerPolicy="no-referrer" />
       ) : (

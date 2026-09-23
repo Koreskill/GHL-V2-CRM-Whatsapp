@@ -6,7 +6,7 @@ import { authorize, jsonError } from "@/lib/api";
 import { syncChannelAccounts } from "@/lib/zernio/accounts";
 
 export async function POST() {
-  const auth = await authorize("admin");
+  const auth = await authorize("admin", { name: "accounts", max: 10, windowMs: 60_000 });
   if ("response" in auth) return auth.response;
 
   const db = getDb();

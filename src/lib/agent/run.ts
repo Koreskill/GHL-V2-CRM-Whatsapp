@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, ne } from "drizzle-orm";
+import { and, desc, eq, gt, ne, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { getDb } from "@/db";
@@ -13,6 +13,9 @@ import { TOOL_DEFINITIONS, runTool } from "./tools";
 export const MAX_AGENT_DELAY_MS = 10 * 60 * 1000;
 const HISTORY_LIMIT = 30;
 const MAX_TOOL_ROUNDS = 3;
+const MAX_MESSAGE_CHARS = 2000;
+const AGENT_MAX_PER_CONVERSATION_HOUR = 20;
+const agentMaxPerHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR) || 300;
 
 export type AgentRunResult =
   | { status: "skipped"; reason: string }
@@ -29,7 +32,7 @@ async function loadHistory(conversationId: string): Promise<ChatCompletionMessag
     .limit(HISTORY_LIMIT);
   return rows.reverse().map((m) => ({
     role: m.direction === "inbound" ? ("user" as const) : ("assistant" as const),
-    content: m.body ?? `[${m.type}]`,
+    content: (m.body ?? `[${m.type}]`).slice(0, MAX_MESSAGE_CHARS),
   }));
 }
 
@@ -64,6 +67,17 @@ export async function runAgentForConversation(
   if (!config.enabled) return { status: "skipped", reason: "channel_off" };
   if (computeWindow(conv.channel, conv.lastInboundAt).state !== "open") return { status: "skipped", reason: "window_closed" };
   if (await superseded(conversationId, trigger)) return { status: "skipped", reason: "superseded" };
+
+  // Topes de gasto: alguien que manda cientos de mensajes no puede vaciar el saldo de OpenAI.
+  const [usage] = await db.execute<{ conv: number; total: number }>(sql`
+    select
+      count(*) filter (where conversation_id = ${conversationId})::int as conv,
+      count(*)::int as total
+    from messages
+    where direction = 'outbound' and raw_payload->>'source' = 'agent' and sent_at >= now() - interval '1 hour'
+  `);
+  if (usage.conv >= AGENT_MAX_PER_CONVERSATION_HOUR) return { status: "skipped", reason: "limit_conversation" };
+  if (usage.total >= agentMaxPerHour()) return { status: "skipped", reason: "limit_global" };
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return { status: "skipped", reason: "openai_key_missing" };
@@ -111,6 +125,7 @@ export async function runAgentForConversation(
   }
 
   if (!reply) return { status: "skipped", reason: "empty_reply" };
+  reply = reply.slice(0, 4096); // máximo de un mensaje de WhatsApp
 
   // Mientras el modelo pensaba pudo escribir el cliente, contestar un vendedor o apagarse la IA.
   if (await superseded(conversationId, trigger)) return { status: "skipped", reason: "superseded_after_llm" };

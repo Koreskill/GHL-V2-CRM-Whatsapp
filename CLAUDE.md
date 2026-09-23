@@ -62,6 +62,17 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - Contactos, Actividades y Reportes salen de `src/lib/crm/queries.ts` (datos reales, sin tablas nuevas). Calendario: reservas próximas vía API v2 de Cal.com (`CALCOM_API_KEY`, header `cal-api-version: 2024-08-13`) + página de agenda embebida desde `CALCOM_URL` (runtime, solo https). El agente recibe `CALCOM_URL` en su prompt para compartirlo cuando alguien quiere agendar.
 - Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
 
+## Seguridad (auditoría 2026-09-23)
+
+- Roles en `auth.users.raw_app_meta_data.crm_role` (`admin` | `agent`), asignados por SQL. Sin rol no se entra (proxy, layout, login y `authorize()`). Lo de admin (Configuración, cuentas, crear plantillas, importar) se valida en el servidor con `authorize("admin")` / `requireRole("admin")`.
+- `anon` y `authenticated` NO tienen permisos sobre ninguna tabla (migración 0003). Toda tabla nueva: RLS + GRANT/política solo para `crm_app`, nunca para esos roles.
+- Cookies de sesión `httpOnly` + `secure` (`supabaseCookieOptions`). No hay cliente de Supabase en el navegador: no agregar uno sin revisar esto.
+- Proxy: límite 240 req/min por IP en la API de personas, bloqueo CSRF por `Origin` en métodos que modifican (salvo webhooks/cron). Login: 10 intentos por IP y 5 por email cada 15 min. `authorize(role, limit)` para límites por usuario. El limitador es en memoria: con más de una réplica hay que moverlo a Redis/DB.
+- Agente: tope de 20 respuestas por conversación/hora y `AGENT_MAX_REPLIES_PER_HOUR` (300) global.
+- Logs: nunca loguear el error de Drizzle entero (trae los parámetros con datos personales); usar `safeError()`. No loguear textos de mensajes ni lo que escribe el modelo.
+- Headers de seguridad y CSP en `next.config.ts`. Si se embebe otro servicio, agregarlo a `frame-src`.
+- URLs que vienen de terceros y terminan en el navegador (authUrl, fotos, meetingUrl) se validan (`https://`, dominio esperado) antes de usarlas.
+
 ## Zernio: mapeo de ids (verificado contra el OpenAPI 1.62.0)
 
 - Tipos generados en `src/lib/zernio/openapi.d.ts` desde `openapi/zernio.slim.json` (`npm run zernio:openapi`). Nunca editarlos a mano.

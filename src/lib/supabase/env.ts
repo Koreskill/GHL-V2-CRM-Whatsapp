@@ -7,3 +7,14 @@ export function supabaseEnv() {
   }
   return { url, key };
 }
+
+// Supabase se usa solo en el servidor, así que la cookie de sesión puede ser httpOnly:
+// un script inyectado en la página no la puede leer ni robar.
+export function supabaseCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+  };
+}

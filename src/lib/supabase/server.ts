@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { supabaseEnv } from "./env";
+import { supabaseCookieOptions, supabaseEnv } from "./env";
 
 export async function createSupabaseServer() {
   // cookies() primero: marca la ruta como dinámica, así el build no intenta prerenderizarla
@@ -11,6 +11,7 @@ export async function createSupabaseServer() {
     supabaseUrl,
     supabaseKey,
     {
+      cookieOptions: supabaseCookieOptions(),
       cookies: {
         getAll: () => cookieStore.getAll(),
         setAll: (list) => {

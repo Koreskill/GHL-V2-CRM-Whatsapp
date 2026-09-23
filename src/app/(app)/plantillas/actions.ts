@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { channelAccounts } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
+import { rateLimit } from "@/lib/rate-limit";
 import { createTemplate } from "@/lib/zernio/templates";
 
 const NAME = /^[a-z][a-z0-9_]{0,511}$/;
@@ -14,7 +15,11 @@ const CATEGORIES = new Set(["UTILITY", "MARKETING"]);
 export type CreateTemplateState = { error: string | null };
 
 export async function createTemplateAction(_prev: CreateTemplateState, formData: FormData): Promise<CreateTemplateState> {
-  if (!(await requireRole("admin"))) return { error: "Solo un administrador puede crear plantillas." };
+  const session = await requireRole("admin");
+  if (!session) return { error: "Solo un administrador puede crear plantillas." };
+  if (!rateLimit(`template-create:${session.user.id}`, 10, 60 * 60_000).ok) {
+    return { error: "Creaste muchas plantillas seguidas. Espera un rato antes de crear otra." };
+  }
 
   const accountId = String(formData.get("accountId") ?? "");
   const name = String(formData.get("name") ?? "").trim();

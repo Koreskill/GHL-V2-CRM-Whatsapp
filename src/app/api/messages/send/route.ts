@@ -17,7 +17,7 @@ function parseTemplate(value: unknown): TemplateInput | null {
 
 // Un único endpoint de envío: texto libre o plantilla de WhatsApp, siempre por deliverMessage.
 export async function POST(req: Request) {
-  const auth = await authorize();
+  const auth = await authorize("agent", { name: "send", max: 30, windowMs: 60_000 });
   if ("response" in auth) return auth.response;
 
   const body = (await req.json().catch(() => null)) as { conversationId?: unknown; text?: unknown; template?: unknown } | null;

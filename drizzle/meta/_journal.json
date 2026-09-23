@@ -22,6 +22,13 @@
       "when": 1790189126898,
       "tag": "0002_crm_app_role",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790198667018,
+      "tag": "0003_revoke_public_roles",
+      "breakpoints": true
     }
   ]
 }

@@ -3,10 +3,13 @@ import { getDb } from "@/db";
 import { isCronAuthorized } from "@/lib/cron-auth";
 import { claimEvent, listStuckEvents, processEvent } from "@/lib/inbox/webhook-events";
 import type { IngestResult } from "@/lib/inbox/ingest";
+import { safeError } from "@/lib/safe-error";
 import type { ZernioWebhookPayload } from "@/lib/zernio/types";
 import { EVENT_HEADER, EVENT_ID_HEADER, SIGNATURE_HEADER, verifyZernioSignature } from "@/lib/zernio/webhooks";
 
 export const dynamic = "force-dynamic";
+
+const MAX_BODY_BYTES = 1_000_000;
 
 const ok = (body: Record<string, unknown> = { ok: true }) => Response.json(body, { status: 200 });
 
@@ -23,7 +26,7 @@ function scheduleAgent(result: IngestResult | null) {
       const db = getDb();
       const [account] = await db.select().from(channelAccounts).where(eq(channelAccounts.externalId, accountExternalId));
       if (!account) return;
-      const r = await importAccountHistory(db, account).catch((err: unknown) => ({ error: String(err) }));
+      const r = await importAccountHistory(db, account).catch((err: unknown) => ({ error: safeError(err) }));
       console.log(`[import] ${account.channel}:`, "error" in r ? r.error : `${r.conversations} conversaciones, ${r.messages} mensajes`);
     });
     return;
@@ -34,15 +37,21 @@ function scheduleAgent(result: IngestResult | null) {
     // Import dinámico: el grafo del agente (OpenAI incluido) no entra en el cold start del webhook.
     const { runAgentForConversation } = await import("@/lib/agent/run");
     const outcome = await runAgentForConversation(conversationId, { triggerMessageId: messageId }).catch(
-      (err: unknown) => ({ status: "failed" as const, error: String(err) }),
+      (err: unknown) => ({ status: "failed" as const, error: safeError(err) }),
     );
     console.log(`[agent] ${conversationId}:`, outcome);
   });
 }
 
 export async function POST(req: Request) {
+  // Un evento de Zernio pesa unos KB: un body gigante es abuso, se corta antes de leerlo.
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
+    return Response.json({ error: "payload_too_large" }, { status: 413 });
+  }
+
   // 1. Body CRUDO y firma. Re-serializar el JSON rompería la firma.
   const raw = await req.text();
+  if (raw.length > MAX_BODY_BYTES) return Response.json({ error: "payload_too_large" }, { status: 413 });
   if (!verifyZernioSignature(raw, req.headers.get(SIGNATURE_HEADER))) {
     return Response.json({ error: "invalid_signature" }, { status: 401 });
   }
@@ -67,7 +76,7 @@ export async function POST(req: Request) {
     if (!claimed) return ok({ ok: true, duplicate: true });
   } catch (err) {
     // Sin poder reclamar no hay idempotencia: que Zernio reintente.
-    console.error("[zernio] no se pudo reclamar el evento", err);
+    console.error(`[zernio] no se pudo reclamar el evento: ${safeError(err)}`);
     return Response.json({ error: "storage_unavailable" }, { status: 503 });
   }
 

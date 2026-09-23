@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "../src/lib/agent/config";
 import { roleOf } from "../src/lib/auth";
+import { clientIp, rateLimit } from "../src/lib/rate-limit";
+import { safeError } from "../src/lib/safe-error";
 import { computeWindow } from "../src/lib/inbox/window";
 import { renderTemplate, templateParamCount } from "../src/lib/zernio/templates";
 
@@ -59,5 +61,18 @@ assert.equal(roleOf({ app_metadata: { crm_role: "agent" } }), "agent");
 assert.equal(roleOf({ app_metadata: { crm_role: "superadmin" } }), null, "rol desconocido no entra");
 assert.equal(roleOf({ app_metadata: {} }), null, "registrado sin rol no entra");
 assert.equal(roleOf(null), null);
+
+// Límite de peticiones: el sexto intento dentro de la ventana se rechaza; otra clave no se ve afectada.
+for (let i = 0; i < 5; i++) assert.equal(rateLimit("test:login", 5, 60_000).ok, true);
+assert.equal(rateLimit("test:login", 5, 60_000).ok, false, "fuerza bruta cortada");
+assert.equal(rateLimit("test:otra", 5, 60_000).ok, true);
+assert.equal(clientIp(new Headers({ "x-forwarded-for": "1.1.1.1, 9.9.9.9" })), "9.9.9.9", "usa la IP que agregó nuestro proxy");
+assert.equal(clientIp(new Headers({ "x-real-ip": "8.8.8.8", "x-forwarded-for": "1.1.1.1" })), "8.8.8.8");
+
+// Logs sin datos personales: los parámetros de la consulta no salen del error.
+const dbErr = new Error('Failed query: insert into "contacts" ("name","phone") values ($1, $2)\nparams: Juan Pérez,+5493410000000');
+assert.ok(!safeError(dbErr).includes("5493410000000") && !safeError(dbErr).includes("Juan"), "sin teléfono ni nombre");
+const pgErr = Object.assign(new Error("Failed query: ...\nparams: secreto"), { cause: { code: "23505", message: "duplicate key value" } });
+assert.equal(safeError(pgErr), "23505 duplicate key value");
 
 console.log("units: OK");

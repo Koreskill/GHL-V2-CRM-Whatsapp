@@ -1,7 +1,9 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { roleOf } from "@/lib/auth";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 function safeNext(value: FormDataEntryValue | null) {
@@ -17,6 +19,12 @@ export async function signIn(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim().slice(0, MAX_FIELD);
   const password = String(formData.get("password") ?? "").slice(0, MAX_FIELD);
   if (!email || !password) redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
+
+  // Fuerza bruta: 10 intentos por IP y 5 por email cada 15 minutos.
+  const ip = clientIp(await headers());
+  const byIp = rateLimit(`login:ip:${ip}`, 10, 15 * 60_000);
+  const byEmail = rateLimit(`login:email:${email.toLowerCase()}`, 5, 15 * 60_000);
+  if (!byIp.ok || !byEmail.ok) redirect(`/login?error=limite&next=${encodeURIComponent(next)}`);
 
   const supabase = await createSupabaseServer();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });

@@ -2,6 +2,7 @@ import { and, asc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { webhookEvents } from "@/db/schema";
 import type { ZernioWebhookPayload } from "@/lib/zernio/types";
+import { safeError } from "@/lib/safe-error";
 import { ingestZernioEvent, type IngestResult } from "./ingest";
 
 // INSERT ... ON CONFLICT DO NOTHING RETURNING: si no insertó, es un reintento.
@@ -36,11 +37,11 @@ export async function processEvent(
     if (result.kind === "ignored") console.warn(`[zernio] evento ${eventId} ignorado: ${result.reason}`);
     return result;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[zernio] fallo procesando ${eventId}:`, err);
+    const message = safeError(err);
+    console.error(`[zernio] fallo procesando ${eventId}: ${message}`);
     await db
       .update(webhookEvents)
-      .set({ error: message.slice(0, 1000) })
+      .set({ error: message })
       .where(eq(webhookEvents.eventId, eventId))
       .catch(() => {});
     return null;

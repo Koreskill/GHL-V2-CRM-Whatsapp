@@ -32,17 +32,14 @@ export const TOOL_DEFINITIONS: Record<ToolName, ChatCompletionTool> = {
 
 export type ToolContext = { conversationId: string };
 
-export async function runTool(name: string, rawArgs: string, ctx: ToolContext): Promise<{ output: string; handoff?: boolean }> {
+// El motivo que escribe el modelo no se loguea: puede contener datos del cliente.
+export async function runTool(name: string, _rawArgs: string, ctx: ToolContext): Promise<{ output: string; handoff?: boolean }> {
   if (name === "handoff_to_human") {
-    let reason = "";
-    try {
-      reason = String(JSON.parse(rawArgs || "{}").reason ?? "");
-    } catch {}
     await getDb()
       .update(conversations)
       .set({ aiEnabled: false })
       .where(eq(conversations.id, ctx.conversationId));
-    console.log(`[agent] handoff ${ctx.conversationId}: ${reason}`);
+    console.log(`[agent] derivado a humano: ${ctx.conversationId}`);
     return { output: "Conversación derivada a un vendedor. Despedite brevemente avisando que una persona continúa.", handoff: true };
   }
   return { output: `Herramienta desconocida: ${name}` };
