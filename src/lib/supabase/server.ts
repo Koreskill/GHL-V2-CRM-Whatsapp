@@ -3,8 +3,10 @@ import { cookies } from "next/headers";
 import { supabaseEnv } from "./env";
 
 export async function createSupabaseServer() {
-  const { url: supabaseUrl, key: supabaseKey } = supabaseEnv();
+  // cookies() primero: marca la ruta como dinámica, así el build no intenta prerenderizarla
+  // (en el build de la imagen las variables no existen todavía).
   const cookieStore = await cookies();
+  const { url: supabaseUrl, key: supabaseKey } = supabaseEnv();
   return createServerClient(
     supabaseUrl,
     supabaseKey,
