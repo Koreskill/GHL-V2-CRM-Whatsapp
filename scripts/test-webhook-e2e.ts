@@ -13,6 +13,7 @@ import type { WebhookMessageReceived, WebhookMessageStatus } from "../src/lib/ze
 import { getConversation, listConversations, listMessages } from "../src/lib/inbox/queries";
 import { deliverMessage } from "../src/lib/inbox/deliver";
 import { runAgentForConversation } from "../src/lib/agent/run";
+import { getReport, listActivity, listContacts } from "../src/lib/crm/queries";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const SECRET = process.env.ZERNIO_WEBHOOK_SECRET!;
@@ -173,6 +174,19 @@ async function main() {
 
     const unknown = await post("/api/webhooks/zernio", { id: randomUUID(), event: "algo.nuevo", timestamp: new Date().toISOString(), note: run });
     assert.equal(unknown.status, 200, "evento desconocido: 200, nunca 500");
+
+    // ---- Contactos, Actividades, Reportes ----
+    const people = await listContacts({ q: "Cliente E2E" });
+    assert.equal(people.length, 1, "un contacto aunque tenga dos identidades");
+    assert.deepEqual(people[0].handles.map((h) => h.channel), ["whatsapp"], "un badge por canal");
+    assert.deepEqual(people[0].conversations.map((c) => c.id), [conv.id], "link a su conversación");
+    assert.equal((await listContacts({ q: "Cliente E2E", channel: "facebook" })).length, 0, "filtro por canal");
+    const feed = (await listActivity(500)).filter((a) => a.conversationId === conv.id);
+    assert.deepEqual(feed.map((a) => a.kind).sort(), ["failed", "new_conversation"], "actividad: conversación nueva + envío fallido");
+    const report = await getReport(7);
+    assert.ok(report.inbound >= 1 && report.newConversations >= 1 && report.failed >= 1, "reporte cuenta los datos de prueba");
+    assert.equal(report.daily.length, 7);
+    assert.ok(report.daily.at(-1)!.inbound >= 1, "el día de hoy tiene el mensaje");
 
     console.log("webhook e2e: OK");
   } finally {

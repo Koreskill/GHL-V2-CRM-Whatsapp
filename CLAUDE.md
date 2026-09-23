@@ -59,6 +59,7 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - Ventana: `src/lib/inbox/window.ts` (`open | human_agent | template_only | closed`). El agente IA solo responde con `open`; `human_agent` es solo para personas.
 - `deliverMessage` inserta una fila `pending`, usa su id como `Idempotency-Key`, y si el webhook `message.sent` ganó la carrera (violación de único) borra la pendiente y conserva la del webhook.
 - Agente: `runAgentForConversation(conversationId, { triggerMessageId })`. Corta si hay un mensaje posterior al disparador (antes y después de llamar a OpenAI), así dos mensajes seguidos del cliente reciben una sola respuesta.
+- Contactos, Actividades y Reportes salen de `src/lib/crm/queries.ts` (datos reales, sin tablas nuevas). Calendario embebe Cal.com desde `CALCOM_URL` (runtime, solo https).
 - Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
 
 ## Zernio: mapeo de ids (verificado contra el OpenAPI 1.62.0)
