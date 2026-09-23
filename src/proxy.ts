@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { supabaseEnv } from "@/lib/supabase/env";
 
 // Rutas que no exigen sesión: el login y lo que llama Zernio (firmado con HMAC o CRON_SECRET).
 const PUBLIC_PREFIXES = ["/login", "/api/webhooks/", "/webhooks/"];
@@ -10,10 +11,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  const { url: supabaseUrl, key: supabaseKey } = supabaseEnv();
   let response = NextResponse.next({ request });
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    supabaseUrl,
+    supabaseKey,
     {
       cookies: {
         getAll: () => request.cookies.getAll(),

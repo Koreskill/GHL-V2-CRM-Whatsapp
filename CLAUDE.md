@@ -55,7 +55,7 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 ## Auth, bandeja y agente
 
 - Supabase Auth (email + contraseña) con `@supabase/ssr`. `src/proxy.ts` protege todo salvo `/login`, `/api/webhooks/*` y `/webhooks/*`; las API routes además llaman `requireUser()`. Los usuarios se crean en el panel de Supabase (no hay registro público).
-- `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` se incrustan al compilar: en Dokploy van como Build Args.
+- Supabase se usa solo del lado del servidor: `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` SIN prefijo `NEXT_PUBLIC_`, así se leen en runtime. Con `NEXT_PUBLIC_` Next las incrusta al compilar la imagen y en Dokploy quedan vacías. No agregar variables `NEXT_PUBLIC_*` salvo que un componente de cliente las necesite, y en ese caso van como Build Args.
 - Ventana: `src/lib/inbox/window.ts` (`open | human_agent | template_only | closed`). El agente IA solo responde con `open`; `human_agent` es solo para personas.
 - `deliverMessage` inserta una fila `pending`, usa su id como `Idempotency-Key`, y si el webhook `message.sent` ganó la carrera (violación de único) borra la pendiente y conserva la del webhook.
 - Agente: `runAgentForConversation(conversationId, { triggerMessageId })`. Corta si hay un mensaje posterior al disparador (antes y después de llamar a OpenAI), así dos mensajes seguidos del cliente reciben una sola respuesta.
