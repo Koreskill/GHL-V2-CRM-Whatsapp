@@ -14,12 +14,14 @@
     "db:counts": "tsx scripts/db-counts.ts",
     "zernio:openapi": "node scripts/zernio-openapi.mjs && openapi-typescript openapi/zernio.slim.json -o src/lib/zernio/openapi.d.ts",
     "zernio:check": "tsx scripts/zernio-check.ts",
-    "test": "tsx scripts/test-signature.ts",
+    "test": "tsx scripts/test-signature.ts && tsx scripts/test-units.ts",
     "zernio:webhook": "tsx scripts/zernio-webhook.ts",
     "test:e2e": "tsx scripts/test-webhook-e2e.ts",
     "zernio:sync": "tsx scripts/zernio-sync.ts"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.3",
     "lucide-react": "^1.47.0",

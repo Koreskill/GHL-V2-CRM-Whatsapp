@@ -52,6 +52,15 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - La ingesta de cada evento corre en UNA transacción: si falla, no queda un mensaje insertado sin sus contadores. Las fechas dentro de `sql\`\`` van como `${d.toISOString()}::timestamptz`, nunca un `Date` crudo.
 - `legacy_conversations` / `legacy_messages` son de un bot anterior; se pueden borrar.
 
+## Auth, bandeja y agente
+
+- Supabase Auth (email + contraseña) con `@supabase/ssr`. `src/proxy.ts` protege todo salvo `/login`, `/api/webhooks/*` y `/webhooks/*`; las API routes además llaman `requireUser()`. Los usuarios se crean en el panel de Supabase (no hay registro público).
+- `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` se incrustan al compilar: en Dokploy van como Build Args.
+- Ventana: `src/lib/inbox/window.ts` (`open | human_agent | template_only | closed`). El agente IA solo responde con `open`; `human_agent` es solo para personas.
+- `deliverMessage` inserta una fila `pending`, usa su id como `Idempotency-Key`, y si el webhook `message.sent` ganó la carrera (violación de único) borra la pendiente y conserva la del webhook.
+- Agente: `runAgentForConversation(conversationId, { triggerMessageId })`. Corta si hay un mensaje posterior al disparador (antes y después de llamar a OpenAI), así dos mensajes seguidos del cliente reciben una sola respuesta.
+- Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
+
 ## Zernio: mapeo de ids (verificado contra el OpenAPI 1.62.0)
 
 - Tipos generados en `src/lib/zernio/openapi.d.ts` desde `openapi/zernio.slim.json` (`npm run zernio:openapi`). Nunca editarlos a mano.

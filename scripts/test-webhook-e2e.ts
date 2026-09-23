@@ -10,6 +10,9 @@ import { eq, inArray, like, sql } from "drizzle-orm";
 import { getDb } from "../src/db";
 import { channelAccounts, contactIdentities, contacts, conversations, messages, webhookEvents } from "../src/db/schema";
 import type { WebhookMessageReceived, WebhookMessageStatus } from "../src/lib/zernio/types";
+import { getConversation, listConversations, listMessages } from "../src/lib/inbox/queries";
+import { deliverMessage } from "../src/lib/inbox/deliver";
+import { runAgentForConversation } from "../src/lib/agent/run";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const SECRET = process.env.ZERNIO_WEBHOOK_SECRET!;
@@ -124,6 +127,42 @@ async function main() {
     assert.equal(idents.length, 1, "identidad BSUID");
     assert.equal(phoneIdent.length, 1, "identidad por sender.id");
     assert.equal(idents[0].contactId, phoneIdent[0].contactId, "ambas identidades, mismo contacto");
+
+    // ---- Bandeja (Fase 4) ----
+    const listed = await listConversations({ q: "Cliente E2E" });
+    const row = listed.find((c) => c.id === conv.id);
+    assert.ok(row, "búsqueda por nombre encuentra la conversación");
+    assert.equal(row.unreadCount, 1);
+    assert.equal(row.preview, "Hola, quiero info de la propiedad", "vista previa del último mensaje");
+    assert.equal(row.phone, "+5493410000000", "WhatsApp muestra teléfono");
+    assert.equal((await listConversations({ channel: "instagram", q: "Cliente E2E" })).length, 0, "filtro por canal");
+    const detail = await getConversation(conv.id);
+    assert.equal(detail?.window.state, "open", "ventana abierta tras un entrante");
+    assert.equal((await listMessages(conv.id)).length, 1);
+
+    // ---- Agente (Fase 5): interruptores, sin llamar a OpenAI ----
+    process.env.OPENAI_API_KEY = "";
+    const trigger = msgs[0].id;
+    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "openai_key_missing" }, "pasa los dos interruptores y la ventana");
+    await db.update(conversations).set({ aiEnabled: false }).where(eq(conversations.id, conv.id));
+    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "conversation_ai_off" });
+    await db.update(conversations).set({ aiEnabled: true }).where(eq(conversations.id, conv.id));
+
+    // ---- deliverMessage: Zernio rechaza la cuenta falsa -> fila persistida como failed ----
+    const failed = await deliverMessage(conv.id, { text: "Prueba e2e", source: "human" });
+    assert.equal(failed.ok, false);
+    assert.equal(!failed.ok && failed.code, "send_failed", "un envío rechazado no se pierde en silencio");
+    const [failedRow] = await db.select().from(messages).where(eq(messages.id, (!failed.ok && failed.message?.id) || ""));
+    assert.equal(failedRow?.status, "failed");
+    assert.equal(failedRow?.direction, "outbound");
+    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "superseded" }, "después de una respuesta, el agente no contesta");
+
+    // ---- Ventana cerrada: WhatsApp fuera de 24 h no deja enviar texto ----
+    await db.update(conversations).set({ lastInboundAt: new Date(Date.now() - 25 * 3_600_000) }).where(eq(conversations.id, conv.id));
+    const closed = await deliverMessage(conv.id, { text: "no debería salir", source: "human" });
+    assert.equal(!closed.ok && closed.code, "window_closed");
+    assert.equal((await getConversation(conv.id))?.window.state, "template_only");
+    assert.equal((await db.select().from(messages).where(eq(messages.conversationId, conv.id))).length, 2, "la ventana cerrada no inserta nada");
 
     const read = await post("/api/webhooks/zernio", status("message.read"));
     const lateDelivered = await post("/api/webhooks/zernio", status("message.delivered"));

@@ -11,12 +11,14 @@ export const dynamic = "force-dynamic";
 const ok = (body: Record<string, unknown> = { ok: true }) => Response.json(body, { status: 200 });
 
 function scheduleAgent(result: IngestResult | null) {
-  if (result?.kind !== "message" || !result.inbound || !result.inserted) return;
-  const { conversationId, sentAt } = result;
+  if (result?.kind !== "message" || !result.inbound || !result.inserted || !result.messageId) return;
+  const { conversationId, messageId } = result;
   after(async () => {
-    // Import dinámico: el grafo del agente no entra en el cold start del webhook.
+    // Import dinámico: el grafo del agente (OpenAI incluido) no entra en el cold start del webhook.
     const { runAgentForConversation } = await import("@/lib/agent/run");
-    const outcome = await runAgentForConversation(conversationId, { triggeredAt: sentAt });
+    const outcome = await runAgentForConversation(conversationId, { triggerMessageId: messageId }).catch(
+      (err: unknown) => ({ status: "failed" as const, error: String(err) }),
+    );
     console.log(`[agent] ${conversationId}:`, outcome);
   });
 }

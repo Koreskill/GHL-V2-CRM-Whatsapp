@@ -1,0 +1,37 @@
+"use server";
+
+import { sql } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { getDb } from "@/db";
+import { agentConfigs } from "@/db/schema";
+import { TOOL_NAMES } from "@/lib/agent/tools";
+import { getUser } from "@/lib/supabase/server";
+
+const SCOPES = new Set(["global", "whatsapp", "instagram", "facebook"]);
+const MODEL_RE = /^[a-zA-Z0-9._:-]{1,80}$/;
+
+export async function saveAgentConfig(formData: FormData) {
+  if (!(await getUser())) redirect("/login");
+
+  const scope = String(formData.get("scope") ?? "");
+  if (!SCOPES.has(scope)) throw new Error("Pestaña inválida");
+
+  const prompt = String(formData.get("systemPrompt") ?? "").trim().slice(0, 20_000);
+  const modelRaw = String(formData.get("model") ?? "").trim();
+  const model = modelRaw && MODEL_RE.test(modelRaw) ? modelRaw : null;
+  const tools = formData.getAll("tools").map(String).filter((t) => (TOOL_NAMES as readonly string[]).includes(t));
+  // `global` no tiene interruptor propio: cada canal se prende o apaga por separado.
+  const enabled = scope === "global" ? true : formData.get("enabled") === "on";
+
+  await getDb()
+    .insert(agentConfigs)
+    .values({ scope, enabled, systemPrompt: prompt || null, model, enabledTools: tools })
+    .onConflictDoUpdate({
+      target: agentConfigs.scope,
+      set: { enabled, systemPrompt: prompt || null, model, enabledTools: tools, updatedAt: sql`now()` },
+    });
+
+  revalidatePath("/configuracion");
+  redirect(`/configuracion?tab=${scope}&saved=1`);
+}

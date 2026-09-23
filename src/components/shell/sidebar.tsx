@@ -6,16 +6,17 @@ import {
   Activity,
   BarChart3,
   CalendarDays,
-  ChevronDown,
   FileText,
   GitBranch,
   LayoutGrid,
+  LogOut,
   MapPin,
   MessageCircle,
   Settings,
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { signOut } from "@/app/login/actions";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
@@ -64,7 +65,12 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
-export function Sidebar() {
+function initials(value: string) {
+  const parts = value.split(/[\s@._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
+}
+
+export function Sidebar({ user }: { user: { email: string; name?: string | null } }) {
   const pathname = usePathname();
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -98,21 +104,28 @@ export function Sidebar() {
           item={{ href: "/configuracion", label: "Configuración", icon: Settings }}
           active={isActive("/configuracion")}
         />
-        <button className="flex items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-white/5">
-          <span className="relative grid size-8 place-items-center rounded-full bg-shell-active text-[12px] font-semibold text-shell-text">
-            BC
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2">
+          <span className="relative grid size-8 shrink-0 place-items-center rounded-full bg-shell-active text-[12px] font-semibold text-shell-text">
+            {initials(user.name ?? user.email)}
             <span className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-shell bg-accent-green" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-medium text-shell-text">
-              Benjamin Cortes
+              {user.name ?? user.email.split("@")[0]}
             </span>
-            <span className="block truncate text-[11.5px] text-shell-muted">
-              nexkore.arg@gmail.com
-            </span>
+            <span className="block truncate text-[11.5px] text-shell-muted">{user.email}</span>
           </span>
-          <ChevronDown className="size-4 text-shell-muted" strokeWidth={1.6} />
-        </button>
+          <form action={signOut}>
+            <button
+              type="submit"
+              aria-label="Cerrar sesión"
+              title="Cerrar sesión"
+              className="grid size-7 place-items-center rounded-md text-shell-muted hover:bg-white/5 hover:text-shell-text"
+            >
+              <LogOut className="size-4" strokeWidth={1.6} />
+            </button>
+          </form>
+        </div>
       </div>
     </aside>
   );
