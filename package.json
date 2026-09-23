@@ -11,7 +11,10 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx scripts/db-seed.ts",
-    "db:counts": "tsx scripts/db-counts.ts"
+    "db:counts": "tsx scripts/db-counts.ts",
+    "zernio:openapi": "node scripts/zernio-openapi.mjs && openapi-typescript openapi/zernio.slim.json -o src/lib/zernio/openapi.d.ts",
+    "zernio:check": "tsx scripts/zernio-check.ts",
+    "test": "tsx scripts/test-signature.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -33,8 +36,10 @@
     "drizzle-kit": "^0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
+    "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
-    "typescript": "^5"
+    "typescript": "^5",
+    "yaml": "^2.9.1"
   }
 }

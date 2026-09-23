@@ -45,6 +45,18 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - **Barridos de recuperación** (`GET /api/webhooks/zernio` y backfill) aceptan `Authorization: Bearer <CRON_SECRET>` o header `x-cron-secret`. En Dokploy se programan con su Scheduler (cada 30 min alcanza: es red de seguridad).
 - Iconos de marca (WhatsApp/Instagram/Messenger) como **SVG inline**.
 
+## Zernio: mapeo de ids (verificado contra el OpenAPI 1.62.0)
+
+- Tipos generados en `src/lib/zernio/openapi.d.ts` desde `openapi/zernio.slim.json` (`npm run zernio:openapi`). Nunca editarlos a mano.
+- `conversations.external_id` = `conversation.platformConversationId` del webhook = `id` de `GET /v1/inbox/conversations`. El `conversation.id` del webhook es el id interno de Zernio: NO usarlo como clave (se guarda en `metadata.zernioConversationId`).
+- `messages.external_id` = `message.platformMessageId` del webhook = `id` de `GET .../messages` = `data.messageId` de `POST .../messages` (el wamid/mid). El `message.id` del webhook es interno: NO usarlo como clave.
+- `channel_accounts.external_id` = `account.id` / `account.accountId` del webhook = `_id` de `GET /v1/accounts`.
+- Toda ruta `/v1/inbox/conversations/{id}/...` exige `accountId` (query o body).
+- Identidad WhatsApp: `sender.businessScopedUserId ?? sender.id`. `sender.id` es el teléfono si está disponible y si no el BSUID; `phoneNumber` puede venir null.
+- Webhook: headers `X-Zernio-Signature` (hex HMAC-SHA256 del body crudo), `X-Zernio-Event`, `X-Zernio-Event-Id` (= `payload.id`, clave de dedupe). 5s para 2xx, hasta 7 intentos.
+- Envío: header `Idempotency-Key` hace seguros los reintentos. Fuera de ventana en IG/FB: `messagingType: "MESSAGE_TAG"` + `messageTag: "HUMAN_AGENT"`. WhatsApp fuera de ventana: campo `template`.
+- Atribución de anuncios: `metadata.referral` en `message.received` (solo el primer mensaje tras el click) y `metadata` del listado REST (`ctwa_*`, `meta_ad_id`).
+
 ## Fases (no avanzar si la anterior no compila)
 
 Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` limpios.

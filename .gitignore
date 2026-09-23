@@ -40,3 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 !.env.example
+
+# OpenAPI completo de Zernio (3 MB); se versiona solo el recorte
+/openapi/zernio.yaml
