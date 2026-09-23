@@ -14,7 +14,8 @@
     "db:counts": "tsx scripts/db-counts.ts",
     "zernio:openapi": "node scripts/zernio-openapi.mjs && openapi-typescript openapi/zernio.slim.json -o src/lib/zernio/openapi.d.ts",
     "zernio:check": "tsx scripts/zernio-check.ts",
-    "test": "tsx scripts/test-signature.ts"
+    "test": "tsx scripts/test-signature.ts",
+    "zernio:webhook": "tsx scripts/zernio-webhook.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
