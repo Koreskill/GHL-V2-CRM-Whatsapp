@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { getDb } from "@/db";
 import { conversations, messages } from "@/db/schema";
+import { calcomBookingUrl } from "@/lib/calcom";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
 import { resolveAgentConfig } from "./config";
@@ -68,8 +69,13 @@ export async function runAgentForConversation(
   if (!apiKey) return { status: "skipped", reason: "openai_key_missing" };
   const openai = new OpenAI({ apiKey, timeout: 45_000, maxRetries: 1 });
 
+  const bookingUrl = calcomBookingUrl();
+  const systemPrompt = bookingUrl
+    ? `${config.systemPrompt}\n\nSi la persona quiere agendar una reunión o visita, compartí este link para que elija el horario: ${bookingUrl.toString()}. No propongas horarios concretos vos.`
+    : config.systemPrompt;
+
   const chat: ChatCompletionMessageParam[] = [
-    { role: "system", content: config.systemPrompt },
+    { role: "system", content: systemPrompt },
     ...(await loadHistory(conversationId)),
   ];
   const tools = config.tools.map((t) => TOOL_DEFINITIONS[t]);
