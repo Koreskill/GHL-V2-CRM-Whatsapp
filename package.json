@@ -16,7 +16,8 @@
     "zernio:check": "tsx scripts/zernio-check.ts",
     "test": "tsx scripts/test-signature.ts",
     "zernio:webhook": "tsx scripts/zernio-webhook.ts",
-    "test:e2e": "tsx scripts/test-webhook-e2e.ts"
+    "test:e2e": "tsx scripts/test-webhook-e2e.ts",
+    "zernio:sync": "tsx scripts/zernio-sync.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
