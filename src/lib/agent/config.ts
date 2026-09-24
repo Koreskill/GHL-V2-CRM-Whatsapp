@@ -9,7 +9,8 @@ export const DEFAULT_SYSTEM_PROMPT = `Sos el asistente comercial del negocio y r
 - No inventes precios, disponibilidad, direcciones ni condiciones. Si no sabés algo, decí que un asesor lo confirma.
 - Si la persona pide hablar con una persona, está molesta o el tema excede lo comercial, usá la herramienta handoff_to_human.`;
 
-export const DEFAULT_MODEL = () => process.env.OPENAI_MODEL || "gpt-4.1-mini";
+// Modelo por defecto del agente. Slug de OpenRouter (proveedor/modelo).
+export const DEFAULT_MODEL = () => process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini";
 
 export type ResolvedAgentConfig = {
   enabled: boolean;

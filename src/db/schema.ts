@@ -4,6 +4,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   primaryKey,
@@ -30,6 +31,35 @@ export const networkMemberStatusEnum = pgEnum("network_member_status", [
   "invitada",
   "suspendida",
 ]);
+// Fase 3 — Propiedades
+export const operationTypeEnum = pgEnum("operation_type", ["venta", "alquiler", "temporario"]);
+export const propertyTypeEnum = pgEnum("property_type", [
+  "departamento",
+  "casa",
+  "ph",
+  "terreno",
+  "local",
+  "oficina",
+  "cochera",
+  "otro",
+]);
+export const propertyStatusEnum = pgEnum("property_status", [
+  "borrador",
+  "disponible",
+  "reservada",
+  "vendida",
+  "alquilada",
+  "pausada",
+]);
+export const listingStatusEnum = pgEnum("listing_status", ["publicada", "pausada", "retirada"]);
+// Fase 4 — Capa de IA (OpenRouter)
+export const aiFunctionEnum = pgEnum("ai_function", [
+  "conversacional",
+  "extraccion",
+  "calificacion",
+  "fallback",
+]);
+export const aiCallStatusEnum = pgEnum("ai_call_status", ["ok", "error", "timeout"]);
 
 export type Channel = (typeof channelEnum.enumValues)[number];
 export type Provider = (typeof providerEnum.enumValues)[number];
@@ -277,4 +307,129 @@ export const webhookEvents = pgTable(
       .on(t.receivedAt)
       .where(sql`${t.processedAt} is null`),
   ],
+);
+
+// ─── Fase 3: Propiedades ────────────────────────────────────────────────────
+// La propiedad privada del tenant: tiene TODO, incluida la info reservada que nunca se comparte.
+export const properties = pgTable(
+  "properties",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    ownerContactId: uuid("owner_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    operation: operationTypeEnum("operation").notNull(),
+    propertyType: propertyTypeEnum("property_type").notNull(),
+    status: propertyStatusEnum("status").notNull().default("borrador"),
+    title: text("title"),
+    description: text("description"),
+    price: numeric("price", { precision: 14, scale: 2 }),
+    currency: text("currency").notNull().default("USD"),
+    addressFull: text("address_full"), // privado
+    zone: text("zone"),
+    city: text("city"),
+    lat: numeric("lat"),
+    lng: numeric("lng"),
+    bedrooms: integer("bedrooms"),
+    bathrooms: integer("bathrooms"),
+    areaM2: numeric("area_m2"),
+    features: jsonb("features").$type<Record<string, unknown>>().notNull().default({}),
+    photos: jsonb("photos").$type<string[]>().notNull().default([]),
+    internalNotes: text("internal_notes"), // privado, nunca sale del tenant
+    documents: jsonb("documents").$type<unknown[]>().notNull().default([]), // privado
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [
+    index("properties_org_status_idx").on(t.organizationId, t.status),
+    index("properties_org_operation_type_idx").on(t.organizationId, t.operation, t.propertyType),
+  ],
+);
+
+// La proyección compartida en la red: solo campos comerciales. Compartir = crear/actualizar acá,
+// no abrir acceso a properties. owner_organization_id es fijo, nunca cambia.
+export const networkPropertyListings = pgTable(
+  "network_property_listings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    networkId: uuid("network_id")
+      .notNull()
+      .references(() => networks.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id")
+      .notNull()
+      .references(() => properties.id, { onDelete: "cascade" }),
+    ownerOrganizationId: uuid("owner_organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    operation: operationTypeEnum("operation").notNull(),
+    propertyType: propertyTypeEnum("property_type").notNull(),
+    price: numeric("price", { precision: 14, scale: 2 }),
+    currency: text("currency").notNull().default("USD"),
+    zone: text("zone"),
+    city: text("city"),
+    lat: numeric("lat"),
+    lng: numeric("lng"),
+    bedrooms: integer("bedrooms"),
+    bathrooms: integer("bathrooms"),
+    areaM2: numeric("area_m2"),
+    features: jsonb("features").$type<Record<string, unknown>>().notNull().default({}),
+    photos: jsonb("photos").$type<string[]>().notNull().default([]),
+    commercialDescription: text("commercial_description"),
+    availability: text("availability").notNull().default("disponible"),
+    presentationLink: text("presentation_link"),
+    collaborationTerms: jsonb("collaboration_terms").$type<Record<string, unknown>>().notNull().default({}),
+    status: listingStatusEnum("status").notNull().default("publicada"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("network_property_listings_network_property_key").on(t.networkId, t.propertyId),
+    index("network_property_listings_network_idx").on(t.networkId, t.status),
+    index("network_property_listings_owner_org_idx").on(t.ownerOrganizationId),
+  ],
+);
+
+// ─── Fase 4: Capa de IA (OpenRouter) ────────────────────────────────────────
+// Modelo por inmobiliaria y función. Las CLAVES no van acá: viven en env server-side.
+export const aiModelConfigs = pgTable(
+  "ai_model_configs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    function: aiFunctionEnum("function").notNull(),
+    provider: text("provider").notNull().default("openrouter"),
+    model: text("model").notNull(),
+    params: jsonb("params").$type<Record<string, unknown>>().notNull().default({}),
+    priority: integer("priority").notNull().default(0),
+    enabled: boolean("enabled").notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("ai_model_configs_org_function_priority_key").on(t.organizationId, t.function, t.priority)],
+);
+
+// Registro de cada request a IA: proveedor, modelo, tokens, costo, latencia, estado.
+export const aiUsageLogs = pgTable(
+  "ai_usage_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    function: aiFunctionEnum("function").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    promptTokens: integer("prompt_tokens"),
+    completionTokens: integer("completion_tokens"),
+    totalTokens: integer("total_tokens"),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6 }),
+    latencyMs: integer("latency_ms"),
+    status: aiCallStatusEnum("status").notNull(),
+    error: text("error"), // sin datos personales (safeError)
+    requestRef: jsonb("request_ref").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ai_usage_logs_org_created_idx").on(t.organizationId, t.createdAt)],
 );

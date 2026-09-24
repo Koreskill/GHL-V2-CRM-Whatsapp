@@ -1,8 +1,8 @@
 import { and, desc, eq, gt, ne, sql } from "drizzle-orm";
-import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { getDb } from "@/db";
 import { conversations, messages } from "@/db/schema";
+import { aiChatComplete, openrouterConfigured, resolveModel } from "@/lib/ai/openrouter";
 import { calcomBookingUrl } from "@/lib/calcom";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
@@ -80,9 +80,8 @@ export async function runAgentForConversation(
   if (usage.conv >= AGENT_MAX_PER_CONVERSATION_HOUR) return { status: "skipped", reason: "limit_conversation" };
   if (usage.total >= agentMaxPerHour()) return { status: "skipped", reason: "limit_global" };
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { status: "skipped", reason: "openai_key_missing" };
-  const openai = new OpenAI({ apiKey, timeout: 45_000, maxRetries: 1 });
+  if (!openrouterConfigured()) return { status: "skipped", reason: "openrouter_key_missing" };
+  const modelConfig = await resolveModel(conv.organizationId, "conversacional", config.model);
 
   const bookingUrl = calcomBookingUrl();
   const systemPrompt = bookingUrl
@@ -99,11 +98,18 @@ export async function runAgentForConversation(
   let handoff = false;
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      const completion = await openai.chat.completions.create({
-        model: config.model,
-        messages: chat,
-        ...(tools.length && round < MAX_TOOL_ROUNDS ? { tools } : {}),
-        temperature: 0.4,
+      const completion = await aiChatComplete({
+        organizationId: conv.organizationId,
+        fn: "conversacional",
+        model: modelConfig.model,
+        provider: modelConfig.provider,
+        params: modelConfig.params,
+        body: {
+          messages: chat,
+          ...(tools.length && round < MAX_TOOL_ROUNDS ? { tools } : {}),
+          temperature: 0.4,
+        },
+        requestRef: { conversationId, triggerMessageId: opts.triggerMessageId },
       });
       const choice = completion.choices[0]?.message;
       if (!choice) break;

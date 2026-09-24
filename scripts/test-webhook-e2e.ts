@@ -143,9 +143,9 @@ async function main() {
     assert.equal((await listMessages(conv.id, ORG)).length, 1);
 
     // ---- Agente (Fase 5): interruptores, sin llamar a OpenAI ----
-    process.env.OPENAI_API_KEY = "";
+    process.env.OPENROUTER_API_KEY = "";
     const trigger = msgs[0].id;
-    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "openai_key_missing" }, "pasa los dos interruptores y la ventana");
+    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "openrouter_key_missing" }, "pasa los dos interruptores y la ventana");
     await db.update(conversations).set({ aiEnabled: false }).where(eq(conversations.id, conv.id));
     assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "conversation_ai_off" });
     await db.update(conversations).set({ aiEnabled: true }).where(eq(conversations.id, conv.id));

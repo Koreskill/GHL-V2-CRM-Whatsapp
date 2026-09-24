@@ -36,6 +36,13 @@
       "when": 1790264416744,
       "tag": "0004_multi_tenant",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790265957504,
+      "tag": "0005_properties_and_ai",
+      "breakpoints": true
     }
   ]
 }

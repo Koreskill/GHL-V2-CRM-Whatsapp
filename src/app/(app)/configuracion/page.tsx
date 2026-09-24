@@ -137,9 +137,11 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
           <div className="grid gap-6 p-6 md:grid-cols-2">
             <div>
               <label htmlFor="model" className="text-[15px] font-semibold text-ink">
-                Modelo de OpenAI
+                Modelo de IA (OpenRouter)
               </label>
-              <p className="mb-3 text-[13px] text-muted">{isGlobal ? "Vacío usa OPENAI_MODEL." : "Vacío hereda el de General."}</p>
+              <p className="mb-3 text-[13px] text-muted">
+                {isGlobal ? "Slug de OpenRouter (ej. openai/gpt-4.1-mini). Vacío usa OPENROUTER_MODEL." : "Vacío hereda el de General."}
+              </p>
               <input
                 id="model"
                 name="model"

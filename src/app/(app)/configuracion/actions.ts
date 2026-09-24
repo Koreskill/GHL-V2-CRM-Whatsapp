@@ -9,7 +9,8 @@ import { TOOL_NAMES } from "@/lib/agent/tools";
 import { requireRole } from "@/lib/auth";
 
 const SCOPES = new Set(["global", "whatsapp", "instagram", "facebook"]);
-const MODEL_RE = /^[a-zA-Z0-9._:-]{1,80}$/;
+// Slugs de OpenRouter llevan barra (proveedor/modelo), p. ej. openai/gpt-4.1-mini.
+const MODEL_RE = /^[a-zA-Z0-9._:/-]{1,80}$/;
 
 export async function saveAgentConfig(formData: FormData) {
   const session = await requireRole("admin");

@@ -9,7 +9,7 @@ Bandeja única donde entran y se responden WhatsApp, Instagram DM y Facebook Mes
 - Next.js 16 (App Router) + React 19 + TypeScript + Tailwind 4 + shadcn/ui
 - Supabase (Postgres + Auth) con Drizzle ORM (driver `postgres`)
 - **Zernio** como proveedor único de los tres canales — docs.zernio.com
-- **OpenAI API** (SDK oficial `openai`) para el agente. NO OpenRouter.
+- **OpenRouter** como capa de acceso multi-modelo para el agente (API compatible con OpenAI: se usa el SDK `openai` apuntando su `baseURL`). Toda llamada a IA pasa por `src/lib/ai/openrouter.ts`, que resuelve el modelo por `(organización, función)` en `ai_model_configs` y registra el uso en `ai_usage_logs`. `OPENROUTER_API_KEY` server-side. (Decisión 2026-09-24: reemplaza a OpenAI directo.)
 - Deploy en **Dokploy** (self-hosted, Docker, `output: "standalone"`). NO Vercel.
 
 ## Modelo conceptual (si se rompe acá, no se arregla después)
@@ -93,7 +93,7 @@ Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` lim
 2. Cliente de la API Zernio, tipado contra el OpenAPI
 3. Webhook entrante y persistencia
 4. Bandeja: listar, abrir y responder
-5. Agente por canal (OpenAI)
+5. Agente por canal (OpenRouter)
 6. Deploy en Dokploy, conexión de cuentas y barridos
 
 ## Sistema visual — Setter CRM

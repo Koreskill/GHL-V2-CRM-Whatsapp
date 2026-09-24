@@ -367,10 +367,19 @@ Sin avanzar si la fase previa no compila (`typecheck`, `lint`, `build`).
    a `deliverMessage` (guard de tenant) y a páginas/rutas/actions. **RLS por tenant
    (SET LOCAL) todavía NO**: el aislamiento hoy es a nivel app; el RLS es el
    endurecimiento siguiente.
-3. **Propiedades:** `properties` + `network_property_listings` + flujo de publicar en
-   red (proyección de campos compartibles).
-4. **Capa de IA OpenRouter:** cliente interno único, `ai_model_configs`,
-   `ai_usage_logs`; migrar el motor del agente de OpenAI directo a este servicio.
+3. ✅ **Propiedades (HECHA — migración `0005_properties_and_ai`):** `properties` +
+   `network_property_listings`. Librería `src/lib/properties/queries.ts`:
+   `createProperty`/`listProperties`/`getProperty`/`updateProperty`,
+   `publishToNetwork`/`unpublishFromNetwork` (proyecta solo campos compartibles;
+   `owner_organization_id` fijo; exige membresía activa en la red) y
+   `listNetworkCatalog` (catálogo visible para el tenant, base del matching). **Falta
+   UI** (no hay pantalla de Propiedades en el sistema visual): pendiente de diseño.
+4. ✅ **Capa de IA OpenRouter (HECHA — migración `0005_properties_and_ai`):**
+   `ai_model_configs` + `ai_usage_logs`. Servicio interno `src/lib/ai/openrouter.ts`
+   (`resolveModel` por org+función, `aiChatComplete` con registro de uso). El agente
+   (`agent/run.ts`) ya no llama a OpenAI directo: pasa por este servicio. `OPENROUTER_API_KEY`
+   + `OPENROUTER_MODEL` server-side. `agent_configs.model` (por canal) actúa como
+   fallback de `resolveModel`.
 5. **Prospectos y matching:** `prospect_requirements` (extracción con IA),
    motor de `property_matches`.
 6. **Atribución:** `property_presentations` + regla de notificación al dueño en
@@ -390,7 +399,7 @@ Para no romper la app YA deployada al aplicar la migración en producción:
   `channel_accounts_external_id_unique`) se **conservan** conviviendo con los por
   tenant, porque el código viejo los usa en sus `ON CONFLICT`. Con una sola org son
   igualmente únicos.
-- Una vez deployado el código nuevo, correr **a mano** `drizzle/0005_harden_tenant_isolation.sql`:
+- Una vez deployado el código nuevo, correr **a mano** `drizzle/manual_harden_tenant_isolation.sql`:
   elimina esos índices viejos y quita el DEFAULT de `organization_id` (a partir de ahí,
   todo INSERT trae su org explícita o falla ruidosamente).
 - El **RLS por tenant** (`SET LOCAL app.current_org` + políticas `USING
