@@ -6,6 +6,6 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/conversations/
   if ("response" in auth) return auth.response;
   const { conversationId } = await ctx.params;
   if (!isUuid(conversationId)) return jsonError(400, "conversationId inválido");
-  await markConversationRead(conversationId);
+  await markConversationRead(conversationId, auth.session.organizationId);
   return Response.json({ ok: true });
 }

@@ -62,7 +62,7 @@ export async function runAgentForConversation(
   if (!conv) return { status: "skipped", reason: "conversation_not_found" };
   if (!conv.aiEnabled) return { status: "skipped", reason: "conversation_ai_off" };
 
-  const config = await resolveAgentConfig(conv.channel);
+  const config = await resolveAgentConfig(conv.organizationId, conv.channel);
   // Doble interruptor: el hilo (ai_enabled) Y el canal (agent_configs.enabled).
   if (!config.enabled) return { status: "skipped", reason: "channel_off" };
   if (computeWindow(conv.channel, conv.lastInboundAt).state !== "open") return { status: "skipped", reason: "window_closed" };
@@ -74,7 +74,8 @@ export async function runAgentForConversation(
       count(*) filter (where conversation_id = ${conversationId})::int as conv,
       count(*)::int as total
     from messages
-    where direction = 'outbound' and raw_payload->>'source' = 'agent' and sent_at >= now() - interval '1 hour'
+    where direction = 'outbound' and raw_payload->>'source' = 'agent'
+      and organization_id = ${conv.organizationId} and sent_at >= now() - interval '1 hour'
   `);
   if (usage.conv >= AGENT_MAX_PER_CONVERSATION_HOUR) return { status: "skipped", reason: "limit_conversation" };
   if (usage.total >= agentMaxPerHour()) return { status: "skipped", reason: "limit_global" };

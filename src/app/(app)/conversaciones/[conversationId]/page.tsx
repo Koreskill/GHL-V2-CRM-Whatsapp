@@ -3,18 +3,20 @@ import { ChatView } from "@/components/inbox/chat-view";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { parseInboxFilters } from "@/components/inbox/filters";
 import { isUuid } from "@/lib/api";
+import { requireOrgId } from "@/lib/auth";
 import { countConversations, getConversation, listConversations, listMessages } from "@/lib/inbox/queries";
 
 export default async function ConversationPage({ params, searchParams }: PageProps<"/conversaciones/[conversationId]">) {
   const { conversationId } = await params;
   if (!isUuid(conversationId)) notFound();
+  const orgId = await requireOrgId();
   const filters = parseInboxFilters(await searchParams);
 
   const [conversation, messages, items, total] = await Promise.all([
-    getConversation(conversationId),
-    listMessages(conversationId),
-    listConversations(filters),
-    countConversations(),
+    getConversation(conversationId, orgId),
+    listMessages(conversationId, orgId),
+    listConversations(orgId, filters),
+    countConversations(orgId),
   ]);
   if (!conversation) notFound();
 

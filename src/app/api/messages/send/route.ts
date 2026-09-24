@@ -27,11 +27,11 @@ export async function POST(req: Request) {
   if (body.template !== undefined) {
     const template = parseTemplate(body.template);
     if (!template) return jsonError(400, "Plantilla inválida");
-    result = await deliverMessage(body.conversationId, { template, source: "human" });
+    result = await deliverMessage(body.conversationId, { template, source: "human", organizationId: auth.session.organizationId });
   } else {
     if (typeof body.text !== "string") return jsonError(400, "Se espera { conversationId, text }");
     if (body.text.length > MAX_LENGTH) return jsonError(400, `Máximo ${MAX_LENGTH} caracteres`);
-    result = await deliverMessage(body.conversationId, { text: body.text, source: "human" });
+    result = await deliverMessage(body.conversationId, { text: body.text, source: "human", organizationId: auth.session.organizationId });
   }
 
   if (result.ok) return Response.json({ message: result.message });

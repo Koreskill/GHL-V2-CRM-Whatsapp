@@ -2,13 +2,14 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 import { getDb, schema } from "../src/db";
+import { DEFAULT_ORG_ID } from "../src/lib/tenancy";
 
 // WhatsApp es el canal principal; Instagram y Messenger arrancan apagados.
 const rows = [
-  { scope: "global", enabled: true },
-  { scope: "whatsapp", enabled: true },
-  { scope: "instagram", enabled: false },
-  { scope: "facebook", enabled: false },
+  { organizationId: DEFAULT_ORG_ID, scope: "global", enabled: true },
+  { organizationId: DEFAULT_ORG_ID, scope: "whatsapp", enabled: true },
+  { organizationId: DEFAULT_ORG_ID, scope: "instagram", enabled: false },
+  { organizationId: DEFAULT_ORG_ID, scope: "facebook", enabled: false },
 ];
 
 async function main() {

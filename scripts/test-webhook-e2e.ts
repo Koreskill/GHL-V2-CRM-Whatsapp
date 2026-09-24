@@ -14,6 +14,7 @@ import { getConversation, listConversations, listMessages } from "../src/lib/inb
 import { deliverMessage } from "../src/lib/inbox/deliver";
 import { runAgentForConversation } from "../src/lib/agent/run";
 import { getReport, listActivity, listContacts } from "../src/lib/crm/queries";
+import { DEFAULT_ORG_ID as ORG } from "../src/lib/tenancy";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const SECRET = process.env.ZERNIO_WEBHOOK_SECRET!;
@@ -97,7 +98,7 @@ async function cleanup() {
 
 async function main() {
   const db = getDb();
-  await db.insert(channelAccounts).values({ provider: "zernio", channel: "whatsapp", externalId: ACCOUNT, name: "E2E" });
+  await db.insert(channelAccounts).values({ organizationId: ORG, provider: "zernio", channel: "whatsapp", externalId: ACCOUNT, name: "E2E" });
 
   try {
     const first = await post("/webhooks/zernio/", received);
@@ -130,16 +131,16 @@ async function main() {
     assert.equal(idents[0].contactId, phoneIdent[0].contactId, "ambas identidades, mismo contacto");
 
     // ---- Bandeja (Fase 4) ----
-    const listed = await listConversations({ q: "Cliente E2E" });
+    const listed = await listConversations(ORG, { q: "Cliente E2E" });
     const row = listed.find((c) => c.id === conv.id);
     assert.ok(row, "búsqueda por nombre encuentra la conversación");
     assert.equal(row.unreadCount, 1);
     assert.equal(row.preview, "Hola, quiero info de la propiedad", "vista previa del último mensaje");
     assert.equal(row.phone, "+5493410000000", "WhatsApp muestra teléfono");
-    assert.equal((await listConversations({ channel: "instagram", q: "Cliente E2E" })).length, 0, "filtro por canal");
-    const detail = await getConversation(conv.id);
+    assert.equal((await listConversations(ORG, { channel: "instagram", q: "Cliente E2E" })).length, 0, "filtro por canal");
+    const detail = await getConversation(conv.id, ORG);
     assert.equal(detail?.window.state, "open", "ventana abierta tras un entrante");
-    assert.equal((await listMessages(conv.id)).length, 1);
+    assert.equal((await listMessages(conv.id, ORG)).length, 1);
 
     // ---- Agente (Fase 5): interruptores, sin llamar a OpenAI ----
     process.env.OPENAI_API_KEY = "";
@@ -162,7 +163,7 @@ async function main() {
     await db.update(conversations).set({ lastInboundAt: new Date(Date.now() - 25 * 3_600_000) }).where(eq(conversations.id, conv.id));
     const closed = await deliverMessage(conv.id, { text: "no debería salir", source: "human" });
     assert.equal(!closed.ok && closed.code, "window_closed");
-    assert.equal((await getConversation(conv.id))?.window.state, "template_only");
+    assert.equal((await getConversation(conv.id, ORG))?.window.state, "template_only");
     assert.equal((await db.select().from(messages).where(eq(messages.conversationId, conv.id))).length, 2, "la ventana cerrada no inserta nada");
 
     const read = await post("/api/webhooks/zernio", status("message.read"));
@@ -176,14 +177,14 @@ async function main() {
     assert.equal(unknown.status, 200, "evento desconocido: 200, nunca 500");
 
     // ---- Contactos, Actividades, Reportes ----
-    const people = await listContacts({ q: "Cliente E2E" });
+    const people = await listContacts(ORG, { q: "Cliente E2E" });
     assert.equal(people.length, 1, "un contacto aunque tenga dos identidades");
     assert.deepEqual(people[0].handles.map((h) => h.channel), ["whatsapp"], "un badge por canal");
     assert.deepEqual(people[0].conversations.map((c) => c.id), [conv.id], "link a su conversación");
-    assert.equal((await listContacts({ q: "Cliente E2E", channel: "facebook" })).length, 0, "filtro por canal");
-    const feed = (await listActivity(500)).filter((a) => a.conversationId === conv.id);
+    assert.equal((await listContacts(ORG, { q: "Cliente E2E", channel: "facebook" })).length, 0, "filtro por canal");
+    const feed = (await listActivity(ORG, 500)).filter((a) => a.conversationId === conv.id);
     assert.deepEqual(feed.map((a) => a.kind).sort(), ["failed", "new_conversation"], "actividad: conversación nueva + envío fallido");
-    const report = await getReport(7);
+    const report = await getReport(ORG, 7);
     assert.ok(report.inbound >= 1 && report.newConversations >= 1 && report.failed >= 1, "reporte cuenta los datos de prueba");
     assert.equal(report.daily.length, 7);
     assert.ok(report.daily.at(-1)!.inbound >= 1, "el día de hoy tiene el mensaje");

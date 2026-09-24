@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Activity, AlertCircle, Bot, MessageCircle, Send, UserPlus, type LucideIcon } from "lucide-react";
 import { ChannelBadge } from "@/components/channel-badge";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
+import { requireOrgId } from "@/lib/auth";
 import { listActivity, type ActivityKind } from "@/lib/crm/queries";
 import { dayOf, formatDayDivider, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -17,7 +18,8 @@ const KIND: Record<ActivityKind, { icon: LucideIcon; tone: string; label: (who: 
 };
 
 export default async function ActividadesPage() {
-  const items = await listActivity();
+  const orgId = await requireOrgId();
+  const items = await listActivity(orgId);
 
   return (
     <>

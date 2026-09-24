@@ -9,11 +9,18 @@ import { requireRole } from "@/lib/auth";
 export const metadata = { title: "Nueva plantilla · Setter CRM" };
 
 export default async function NuevaPlantillaPage() {
-  if (!(await requireRole("admin"))) redirect("/plantillas");
+  const session = await requireRole("admin");
+  if (!session) redirect("/plantillas");
   const accounts = await getDb()
     .select({ id: channelAccounts.id, label: channelAccounts.handle, name: channelAccounts.name })
     .from(channelAccounts)
-    .where(and(eq(channelAccounts.channel, "whatsapp"), eq(channelAccounts.status, "connected")));
+    .where(
+      and(
+        eq(channelAccounts.channel, "whatsapp"),
+        eq(channelAccounts.status, "connected"),
+        eq(channelAccounts.organizationId, session.organizationId),
+      ),
+    );
   if (accounts.length === 0) redirect("/plantillas");
 
   return (

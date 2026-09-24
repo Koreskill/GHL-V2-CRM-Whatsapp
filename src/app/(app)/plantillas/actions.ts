@@ -41,7 +41,13 @@ export async function createTemplateAction(_prev: CreateTemplateState, formData:
   const [account] = await getDb()
     .select()
     .from(channelAccounts)
-    .where(and(eq(channelAccounts.id, accountId), eq(channelAccounts.channel, "whatsapp")));
+    .where(
+      and(
+        eq(channelAccounts.id, accountId),
+        eq(channelAccounts.channel, "whatsapp"),
+        eq(channelAccounts.organizationId, session.organizationId),
+      ),
+    );
   if (!account) return { error: "Cuenta de WhatsApp inválida." };
 
   const res = await createTemplate({

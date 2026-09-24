@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { after } from "next/server";
 import { getDb } from "@/db";
 import { channelAccounts } from "@/db/schema";
@@ -11,7 +11,10 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/accounts/[acco
   const { accountId } = await ctx.params;
   if (!isUuid(accountId)) return jsonError(400, "Cuenta inválida");
   const db = getDb();
-  const [account] = await db.select().from(channelAccounts).where(eq(channelAccounts.id, accountId));
+  const [account] = await db
+    .select()
+    .from(channelAccounts)
+    .where(and(eq(channelAccounts.id, accountId), eq(channelAccounts.organizationId, auth.session.organizationId)));
   if (!account) return jsonError(404, "Cuenta inexistente");
   if (account.status !== "connected") return jsonError(409, "La cuenta está desconectada");
 

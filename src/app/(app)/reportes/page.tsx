@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CHANNEL_META } from "@/components/channel-icons";
 import { Card, PageHeader } from "@/components/ui/primitives";
+import { requireOrgId } from "@/lib/auth";
 import { getReport } from "@/lib/crm/queries";
 import { cn } from "@/lib/utils";
 
@@ -21,7 +22,8 @@ function formatDuration(sec: number | null) {
 export default async function ReportesPage({ searchParams }: PageProps<"/reportes">) {
   const params = await searchParams;
   const days = RANGES.find((r) => String(r) === params.days) ?? 30;
-  const r = await getReport(days);
+  const orgId = await requireOrgId();
+  const r = await getReport(orgId, days);
 
   const replies = r.agentReplies + r.humanReplies;
   const agentShare = replies ? Math.round((r.agentReplies / replies) * 100) : null;

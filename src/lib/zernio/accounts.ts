@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { channelAccounts, type Channel } from "@/db/schema";
+import { DEFAULT_ORG_ID } from "@/lib/tenancy";
 import { zernioRequest, type Result } from "./client";
 import type { ConnectPlatform, ConnectUrlResponse, ListAccountsResponse, ZernioAccount } from "./types";
 
@@ -45,6 +46,8 @@ export async function syncChannelAccounts(db: Db): Promise<Result<{ synced: numb
   const rows = res.data
     .filter((a) => isCrmChannel(a.platform))
     .map((a) => ({
+      // Sync refleja el workspace de Zernio; sin contexto de tenant cae en la org por defecto (puente).
+      organizationId: DEFAULT_ORG_ID,
       provider: "zernio" as const,
       channel: a.platform as Channel,
       externalId: a._id,
@@ -59,7 +62,7 @@ export async function syncChannelAccounts(db: Db): Promise<Result<{ synced: numb
       .insert(channelAccounts)
       .values(rows)
       .onConflictDoUpdate({
-        target: channelAccounts.externalId,
+        target: [channelAccounts.organizationId, channelAccounts.externalId],
         set: {
           name: sql`excluded.name`,
           handle: sql`excluded.handle`,

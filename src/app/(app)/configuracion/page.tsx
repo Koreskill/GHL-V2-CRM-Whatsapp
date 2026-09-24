@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
 import { Bot, CheckCircle2, Link2, Settings2 } from "lucide-react";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { AccountsPanel } from "@/components/settings/accounts-panel";
@@ -18,14 +19,16 @@ const TABS: Tab[] = ["cuentas", "whatsapp", "instagram", "facebook", "global"];
 
 export default async function ConfiguracionPage({ searchParams }: PageProps<"/configuracion">) {
   // Solo administradores: la validación es del servidor, no solo ocultar el link del menú.
-  if (!(await requireRole("admin"))) redirect("/");
+  const session = await requireRole("admin");
+  if (!session) redirect("/");
+  const orgId = session.organizationId;
 
   const params = await searchParams;
   const tab: Tab = TABS.includes(params.tab as Tab) ? (params.tab as Tab) : "cuentas";
   const saved = params.saved === "1";
 
   const db = getDb();
-  const rows = await db.select().from(agentConfigs);
+  const rows = await db.select().from(agentConfigs).where(eq(agentConfigs.organizationId, orgId));
 
   const tabs = (
     <div className="mb-5 flex gap-1.5">
@@ -53,7 +56,11 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
   );
 
   if (tab === "cuentas") {
-    const accounts = await db.select().from(channelAccounts).orderBy(channelAccounts.createdAt);
+    const accounts = await db
+      .select()
+      .from(channelAccounts)
+      .where(eq(channelAccounts.organizationId, orgId))
+      .orderBy(channelAccounts.createdAt);
     return (
       <>
         <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />

@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { DbExecutor as Db } from "@/db";
 import { channelAccounts, conversations, messages, type Channel } from "@/db/schema";
 import { isCrmChannel } from "@/lib/zernio/accounts";
+import { DEFAULT_ORG_ID } from "@/lib/tenancy";
 import type {
   InboxWebhookAccount,
   InboxWebhookConversation,
@@ -43,6 +44,7 @@ function attributionFrom(payload: WebhookMessageReceived | WebhookMessageSent) {
 async function upsertConversation(
   db: Db,
   args: {
+    organizationId: string;
     channel: Channel;
     channelAccountId: string;
     accountId: string;
@@ -58,6 +60,7 @@ async function upsertConversation(
   const [row] = await db
     .insert(conversations)
     .values({
+      organizationId: args.organizationId,
       channel: args.channel,
       provider: "zernio",
       externalId: c.platformConversationId,
@@ -71,7 +74,7 @@ async function upsertConversation(
       metadata,
     })
     .onConflictDoUpdate({
-      target: [conversations.provider, conversations.externalId],
+      target: [conversations.organizationId, conversations.provider, conversations.externalId],
       set: {
         participantName: sql`coalesce(excluded.participant_name, ${conversations.participantName})`,
         participantHandle: sql`coalesce(excluded.participant_handle, ${conversations.participantHandle})`,
@@ -92,6 +95,7 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
 
   const msg: WebhookMessage = payload.message;
   const channel = account.channel;
+  const organizationId = account.organizationId;
   if (!isCrmChannel(msg.platform) || msg.platform !== channel) {
     return { kind: "ignored", reason: `platform_mismatch:${msg.platform}` };
   }
@@ -111,9 +115,10 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
       : { externalIds: [conv.participantId], handle: conv.participantUsername ?? null, name: conv.participantName ?? null, phone: null };
   const externalIds = identity.externalIds.filter((v): v is string => Boolean(v));
 
-  const contactId = externalIds.length ? await resolveContact(db, { channel, ...identity, externalIds }) : null;
+  const contactId = externalIds.length ? await resolveContact(db, { organizationId, channel, ...identity, externalIds }) : null;
 
   const conversationId = await upsertConversation(db, {
+    organizationId,
     channel,
     channelAccountId: account.id,
     accountId: account.externalId,
@@ -126,6 +131,7 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
   const [inserted] = await db
     .insert(messages)
     .values({
+      organizationId,
       conversationId,
       channel,
       provider: "zernio",
@@ -137,7 +143,7 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
       rawPayload: payload,
       sentAt,
     })
-    .onConflictDoNothing({ target: messages.externalId, where: sql`${messages.externalId} is not null` })
+    .onConflictDoNothing({ target: [messages.organizationId, messages.externalId], where: sql`${messages.externalId} is not null` })
     .returning({ id: messages.id });
 
   // Contadores solo si el mensaje es nuevo: reprocesar un evento no puede sumar dos veces.
@@ -200,6 +206,8 @@ async function ingestAccount(
   await db
     .insert(channelAccounts)
     .values({
+      // El webhook no dice a qué inmobiliaria pertenece la cuenta: cae en la org por defecto (puente).
+      organizationId: DEFAULT_ORG_ID,
       provider: "zernio",
       channel: account.platform,
       externalId: account.accountId,
@@ -209,7 +217,7 @@ async function ingestAccount(
       metadata: reason ? { disconnectReason: reason } : {},
     })
     .onConflictDoUpdate({
-      target: channelAccounts.externalId,
+      target: [channelAccounts.organizationId, channelAccounts.externalId],
       set: { status, name: sql`excluded.name`, handle: sql`excluded.handle`, metadata: sql`${channelAccounts.metadata} || excluded.metadata`, updatedAt: sql`now()` },
     });
   return { kind: "account", accountExternalId: account.accountId, status };

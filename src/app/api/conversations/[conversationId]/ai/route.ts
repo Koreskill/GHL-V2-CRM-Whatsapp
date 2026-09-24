@@ -9,6 +9,6 @@ export async function POST(req: Request, ctx: RouteContext<"/api/conversations/[
   if (!isUuid(conversationId) || typeof body?.enabled !== "boolean") {
     return jsonError(400, "Se espera { enabled: boolean }");
   }
-  await setConversationAi(conversationId, body.enabled);
+  await setConversationAi(conversationId, auth.session.organizationId, body.enabled);
   return Response.json({ ok: true, enabled: body.enabled });
 }

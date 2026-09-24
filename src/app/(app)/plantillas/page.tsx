@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
 import { AlertCircle, CheckCircle2, FileText, Plus, RefreshCw } from "lucide-react";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { getDb } from "@/db";
@@ -23,9 +24,13 @@ const actionClass = "inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text
 export default async function PlantillasPage({ searchParams }: PageProps<"/plantillas">) {
   const params = await searchParams;
   const session = await getSession();
-  const isAdmin = session?.role === "admin";
+  if (!session) redirect("/login");
+  const isAdmin = session.role === "admin";
 
-  const accounts = await getDb().select().from(channelAccounts).where(eq(channelAccounts.channel, "whatsapp"));
+  const accounts = await getDb()
+    .select()
+    .from(channelAccounts)
+    .where(and(eq(channelAccounts.channel, "whatsapp"), eq(channelAccounts.organizationId, session.organizationId)));
   const connected = accounts.filter((a) => a.status === "connected");
   const results = await Promise.all(
     connected.map(async (a) => ({ account: a, res: await listTemplates({ accountId: a.externalId }) })),

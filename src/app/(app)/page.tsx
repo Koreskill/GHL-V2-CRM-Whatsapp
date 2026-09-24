@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Activity, AlertCircle, Bot, MessageCircle, Send, UserPlus, Users, Workflow, type LucideIcon } from "lucide-react";
 import { ChannelBadge } from "@/components/channel-badge";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
+import { requireOrgId } from "@/lib/auth";
 import { getDashboard, listActivity, type ActivityKind } from "@/lib/crm/queries";
 import { formatListDate } from "@/lib/format";
 import { PIPELINE_STAGES } from "@/lib/pipeline";
@@ -18,7 +19,8 @@ const ACTIVITY: Record<ActivityKind, { icon: LucideIcon; tone: string; label: (w
 };
 
 export default async function DashboardPage() {
-  const [d, activity] = await Promise.all([getDashboard(), listActivity(6)]);
+  const orgId = await requireOrgId();
+  const [d, activity] = await Promise.all([getDashboard(orgId), listActivity(orgId, 6)]);
 
   const metrics = [
     { label: "Total Contactos", value: fmt(d.contacts), hint: `${fmt(d.contacts_week)} nuevos esta semana`, icon: Users, tone: "text-accent-cyan" },

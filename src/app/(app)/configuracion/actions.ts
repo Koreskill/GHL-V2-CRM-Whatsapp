@@ -12,7 +12,8 @@ const SCOPES = new Set(["global", "whatsapp", "instagram", "facebook"]);
 const MODEL_RE = /^[a-zA-Z0-9._:-]{1,80}$/;
 
 export async function saveAgentConfig(formData: FormData) {
-  if (!(await requireRole("admin"))) redirect("/");
+  const session = await requireRole("admin");
+  if (!session) redirect("/");
 
   const scope = String(formData.get("scope") ?? "");
   if (!SCOPES.has(scope)) throw new Error("Pestaña inválida");
@@ -26,9 +27,9 @@ export async function saveAgentConfig(formData: FormData) {
 
   await getDb()
     .insert(agentConfigs)
-    .values({ scope, enabled, systemPrompt: prompt || null, model, enabledTools: tools })
+    .values({ organizationId: session.organizationId, scope, enabled, systemPrompt: prompt || null, model, enabledTools: tools })
     .onConflictDoUpdate({
-      target: agentConfigs.scope,
+      target: [agentConfigs.organizationId, agentConfigs.scope],
       set: { enabled, systemPrompt: prompt || null, model, enabledTools: tools, updatedAt: sql`now()` },
     });
 

@@ -1,4 +1,4 @@
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { agentConfigs, type Channel } from "@/db/schema";
 import { TOOL_NAMES, type ToolName } from "./tools";
@@ -36,8 +36,11 @@ export function mergeAgentConfig(channelRow: Row | undefined, globalRow: Row | u
   };
 }
 
-export async function resolveAgentConfig(channel: Channel): Promise<ResolvedAgentConfig> {
-  const rows = await getDb().select().from(agentConfigs).where(inArray(agentConfigs.scope, [channel, "global"]));
+export async function resolveAgentConfig(orgId: string, channel: Channel): Promise<ResolvedAgentConfig> {
+  const rows = await getDb()
+    .select()
+    .from(agentConfigs)
+    .where(and(eq(agentConfigs.organizationId, orgId), inArray(agentConfigs.scope, [channel, "global"])));
   return mergeAgentConfig(
     rows.find((r) => r.scope === channel),
     rows.find((r) => r.scope === "global"),

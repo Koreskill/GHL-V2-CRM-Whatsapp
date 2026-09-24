@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { conversations } from "@/db/schema";
 import { authorize, isUuid, jsonError } from "@/lib/api";
@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   const [conv] = await getDb()
     .select({ channel: conversations.channel, accountId: conversations.accountId })
     .from(conversations)
-    .where(eq(conversations.id, conversationId));
+    .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, auth.session.organizationId)));
   if (!conv) return jsonError(404, "Conversación inexistente");
   if (conv.channel !== "whatsapp") return Response.json({ templates: [] });
 

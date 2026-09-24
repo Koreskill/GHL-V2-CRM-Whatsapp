@@ -17,7 +17,7 @@ export type ContactRow = {
   createdAt: string;
 };
 
-export async function listContacts(filters: { q?: string; channel?: Channel; limit?: number }) {
+export async function listContacts(orgId: string, filters: { q?: string; channel?: Channel; limit?: number }) {
   const q = filters.q?.trim();
   const like = q ? `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%` : null;
 
@@ -41,7 +41,8 @@ export async function listContacts(filters: { q?: string; channel?: Channel; lim
       (select coalesce(cv.participant_name, cv.participant_handle) from conversations cv
          where cv.contact_id = c.id order by cv.last_message_at desc nulls last limit 1) as fallback_name
     from contacts c
-    where (${like}::text is null
+    where c.organization_id = ${orgId}
+      and (${like}::text is null
            or c.name ilike ${like} or c.phone ilike ${like} or c.email ilike ${like}
            or exists (select 1 from contact_identities ci where ci.contact_id = c.id and ci.handle ilike ${like})
            or exists (select 1 from conversations cv where cv.contact_id = c.id
@@ -68,8 +69,8 @@ export async function listContacts(filters: { q?: string; channel?: Channel; lim
   });
 }
 
-export async function countContacts() {
-  const [row] = await getDb().execute<{ n: number }>(sql`select count(*)::int as n from contacts`);
+export async function countContacts(orgId: string) {
+  const [row] = await getDb().execute<{ n: number }>(sql`select count(*)::int as n from contacts where organization_id = ${orgId}`);
   return row.n;
 }
 
@@ -88,7 +89,7 @@ export type ActivityItem = {
   at: string;
 };
 
-export async function listActivity(limit = 80): Promise<ActivityItem[]> {
+export async function listActivity(orgId: string, limit = 80): Promise<ActivityItem[]> {
   const rows = await getDb().execute<{
     id: string;
     conversation_id: string;
@@ -110,6 +111,7 @@ export async function listActivity(limit = 80): Promise<ActivityItem[]> {
     from messages m
     join conversations cv on cv.id = m.conversation_id
     left join contacts ct on ct.id = cv.contact_id
+    where m.organization_id = ${orgId}
     order by m.sent_at desc
     limit ${limit}
   `);
@@ -140,7 +142,7 @@ export async function listActivity(limit = 80): Promise<ActivityItem[]> {
 
 // ---------- Dashboard ----------
 
-export async function getDashboard() {
+export async function getDashboard(orgId: string) {
   const [row] = await getDb().execute<{
     contacts: number;
     contacts_week: number;
@@ -151,14 +153,14 @@ export async function getDashboard() {
     replies: number;
   }>(sql`
     select
-      (select count(*)::int from contacts) as contacts,
-      (select count(*)::int from contacts where created_at >= now() - interval '7 days') as contacts_week,
-      (select count(*)::int from conversations where last_message_at >= now() - interval '7 days') as active,
-      (select coalesce(sum(unread_count), 0)::int from conversations) as unread,
-      (select count(*)::int from conversations where unread_count > 0) as unread_conversations,
-      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed'
+      (select count(*)::int from contacts where organization_id = ${orgId}) as contacts,
+      (select count(*)::int from contacts where organization_id = ${orgId} and created_at >= now() - interval '7 days') as contacts_week,
+      (select count(*)::int from conversations where organization_id = ${orgId} and last_message_at >= now() - interval '7 days') as active,
+      (select coalesce(sum(unread_count), 0)::int from conversations where organization_id = ${orgId}) as unread,
+      (select count(*)::int from conversations where organization_id = ${orgId} and unread_count > 0) as unread_conversations,
+      (select count(*)::int from messages where organization_id = ${orgId} and direction = 'outbound' and status <> 'failed'
          and raw_payload->>'source' = 'agent' and sent_at >= now() - interval '30 days') as agent,
-      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed'
+      (select count(*)::int from messages where organization_id = ${orgId} and direction = 'outbound' and status <> 'failed'
          and sent_at >= now() - interval '30 days') as replies
   `);
   return row;
@@ -180,7 +182,7 @@ export type ReportData = {
   daily: { day: string; inbound: number }[];
 };
 
-export async function getReport(days: number): Promise<ReportData> {
+export async function getReport(orgId: string, days: number): Promise<ReportData> {
   const db = getDb();
   const since = sql`now() - make_interval(days => ${days})`;
 
@@ -194,13 +196,13 @@ export async function getReport(days: number): Promise<ReportData> {
     unread: number;
   }>(sql`
     select
-      (select count(*)::int from conversations where created_at >= ${since}) as new_conversations,
-      (select count(*)::int from messages where direction = 'inbound' and sent_at >= ${since}) as inbound,
-      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed' and sent_at >= ${since}) as outbound,
-      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed' and raw_payload->>'source' = 'agent' and sent_at >= ${since}) as agent,
-      (select count(*)::int from messages where direction = 'outbound' and status <> 'failed' and coalesce(raw_payload->>'source', 'human') <> 'agent' and sent_at >= ${since}) as human,
-      (select count(*)::int from messages where status = 'failed' and sent_at >= ${since}) as failed,
-      (select coalesce(sum(unread_count), 0)::int from conversations) as unread
+      (select count(*)::int from conversations where organization_id = ${orgId} and created_at >= ${since}) as new_conversations,
+      (select count(*)::int from messages where organization_id = ${orgId} and direction = 'inbound' and sent_at >= ${since}) as inbound,
+      (select count(*)::int from messages where organization_id = ${orgId} and direction = 'outbound' and status <> 'failed' and sent_at >= ${since}) as outbound,
+      (select count(*)::int from messages where organization_id = ${orgId} and direction = 'outbound' and status <> 'failed' and raw_payload->>'source' = 'agent' and sent_at >= ${since}) as agent,
+      (select count(*)::int from messages where organization_id = ${orgId} and direction = 'outbound' and status <> 'failed' and coalesce(raw_payload->>'source', 'human') <> 'agent' and sent_at >= ${since}) as human,
+      (select count(*)::int from messages where organization_id = ${orgId} and status = 'failed' and sent_at >= ${since}) as failed,
+      (select coalesce(sum(unread_count), 0)::int from conversations where organization_id = ${orgId}) as unread
   `);
 
   // Primera respuesta: desde el mensaje del cliente que abre un turno hasta la siguiente salida.
@@ -209,7 +211,7 @@ export async function getReport(days: number): Promise<ReportData> {
       select m.conversation_id, m.sent_at,
              lag(m.direction) over (partition by m.conversation_id order by m.sent_at) as prev
       from messages m
-      where m.status <> 'failed'
+      where m.status <> 'failed' and m.organization_id = ${orgId}
     )
     select percentile_cont(0.5) within group (order by extract(epoch from (o.sent_at - t.sent_at)))::float as median
     from turns t
@@ -226,8 +228,8 @@ export async function getReport(days: number): Promise<ReportData> {
 
   const byChannel = await db.execute<{ channel: Channel; conversations: number; inbound: number }>(sql`
     select ch.channel,
-      (select count(*)::int from conversations c where c.channel = ch.channel) as conversations,
-      (select count(*)::int from messages m where m.channel = ch.channel and m.direction = 'inbound' and m.sent_at >= ${since}) as inbound
+      (select count(*)::int from conversations c where c.organization_id = ${orgId} and c.channel = ch.channel) as conversations,
+      (select count(*)::int from messages m where m.organization_id = ${orgId} and m.channel = ch.channel and m.direction = 'inbound' and m.sent_at >= ${since}) as inbound
     from unnest(array['whatsapp','instagram','facebook']::channel[]) as ch(channel)
   `);
 
@@ -238,7 +240,7 @@ export async function getReport(days: number): Promise<ReportData> {
       (now() at time zone ${TZ})::date,
       interval '1 day'
     ) as d(day)
-    left join messages m on m.direction = 'inbound'
+    left join messages m on m.organization_id = ${orgId} and m.direction = 'inbound'
       and (m.sent_at at time zone ${TZ})::date = d.day::date
     group by d.day
     order by d.day

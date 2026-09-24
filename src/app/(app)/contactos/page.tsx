@@ -4,6 +4,7 @@ import { ChannelBadge } from "@/components/channel-badge";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { parseInboxFilters } from "@/components/inbox/filters";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
+import { requireOrgId } from "@/lib/auth";
 import { countContacts, listContacts } from "@/lib/crm/queries";
 import { formatListDate, initials } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -19,8 +20,9 @@ function href(f: { channel?: Channel; q?: string }) {
 }
 
 export default async function ContactosPage({ searchParams }: PageProps<"/contactos">) {
+  const orgId = await requireOrgId();
   const filters = parseInboxFilters(await searchParams);
-  const [contacts, total] = await Promise.all([listContacts(filters), countContacts()]);
+  const [contacts, total] = await Promise.all([listContacts(orgId, filters), countContacts(orgId)]);
   const filtered = Boolean(filters.channel || filters.q);
 
   return (

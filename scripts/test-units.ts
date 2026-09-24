@@ -23,6 +23,7 @@ assert.equal(computeWindow("whatsapp", ago(1), now).expiresAt, new Date(now + 23
 
 // Cascada canal -> global -> default
 const row = (scope: string, p: Partial<{ enabled: boolean; systemPrompt: string | null; model: string | null; enabledTools: string[] | null }>) => ({
+  organizationId: "00000000-0000-0000-0000-000000000001",
   scope,
   enabled: p.enabled ?? false,
   systemPrompt: p.systemPrompt ?? null,

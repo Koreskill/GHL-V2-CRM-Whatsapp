@@ -16,9 +16,9 @@ export type ConversationListItem = {
   previewDirection: "inbound" | "outbound" | null;
 };
 
-export async function listConversations(filters: { channel?: Channel; q?: string; limit?: number }) {
+export async function listConversations(orgId: string, filters: { channel?: Channel; q?: string; limit?: number }) {
   const db = getDb();
-  const where: SQL[] = [];
+  const where: SQL[] = [eq(conversations.organizationId, orgId)];
   if (filters.channel) where.push(eq(conversations.channel, filters.channel));
   const q = filters.q?.trim();
   if (q) {
@@ -77,8 +77,11 @@ export async function listConversations(filters: { channel?: Channel; q?: string
   }));
 }
 
-export async function countConversations() {
-  const [row] = await getDb().select({ n: sql<number>`count(*)::int` }).from(conversations);
+export async function countConversations(orgId: string) {
+  const [row] = await getDb()
+    .select({ n: sql<number>`count(*)::int` })
+    .from(conversations)
+    .where(eq(conversations.organizationId, orgId));
   return row.n;
 }
 
@@ -87,13 +90,13 @@ export type ConversationDetail = ConversationListItem & {
   window: MessagingWindow;
 };
 
-export async function getConversation(id: string): Promise<ConversationDetail | null> {
+export async function getConversation(id: string, orgId: string): Promise<ConversationDetail | null> {
   const db = getDb();
   const [r] = await db
     .select({ conv: conversations, contactName: contacts.name, contactPhone: contacts.phone })
     .from(conversations)
     .leftJoin(contacts, eq(contacts.id, conversations.contactId))
-    .where(eq(conversations.id, id));
+    .where(and(eq(conversations.id, id), eq(conversations.organizationId, orgId)));
   if (!r) return null;
   const c = r.conv;
   return {
@@ -123,7 +126,7 @@ export type ChatMessage = {
   source: "human" | "agent" | null;
 };
 
-export async function listMessages(conversationId: string, limit = 200): Promise<ChatMessage[]> {
+export async function listMessages(conversationId: string, orgId: string, limit = 200): Promise<ChatMessage[]> {
   const db = getDb();
   const rows = await db
     .select({
@@ -137,7 +140,7 @@ export async function listMessages(conversationId: string, limit = 200): Promise
       source: sql<string | null>`${messages.rawPayload}->>'source'`,
     })
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.organizationId, orgId)))
     .orderBy(desc(messages.sentAt))
     .limit(limit);
 
@@ -148,11 +151,17 @@ export async function listMessages(conversationId: string, limit = 200): Promise
   }));
 }
 
-export async function markConversationRead(id: string) {
-  await getDb().update(conversations).set({ unreadCount: 0 }).where(eq(conversations.id, id));
+export async function markConversationRead(id: string, orgId: string) {
+  await getDb()
+    .update(conversations)
+    .set({ unreadCount: 0 })
+    .where(and(eq(conversations.id, id), eq(conversations.organizationId, orgId)));
 }
 
-export async function setConversationAi(id: string, enabled: boolean) {
-  await getDb().update(conversations).set({ aiEnabled: enabled }).where(eq(conversations.id, id));
+export async function setConversationAi(id: string, orgId: string, enabled: boolean) {
+  await getDb()
+    .update(conversations)
+    .set({ aiEnabled: enabled })
+    .where(and(eq(conversations.id, id), eq(conversations.organizationId, orgId)));
 }
 

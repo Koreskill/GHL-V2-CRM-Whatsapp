@@ -2,11 +2,13 @@ import { MessageCircle } from "lucide-react";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { parseInboxFilters } from "@/components/inbox/filters";
 import { EmptyState } from "@/components/ui/primitives";
+import { requireOrgId } from "@/lib/auth";
 import { countConversations, listConversations } from "@/lib/inbox/queries";
 
 export default async function ConversacionesPage({ searchParams }: PageProps<"/conversaciones">) {
+  const orgId = await requireOrgId();
   const filters = parseInboxFilters(await searchParams);
-  const [items, total] = await Promise.all([listConversations(filters), countConversations()]);
+  const [items, total] = await Promise.all([listConversations(orgId, filters), countConversations(orgId)]);
 
   return (
     <div className="-mx-9 -my-8 flex h-[calc(100%+4rem)]">

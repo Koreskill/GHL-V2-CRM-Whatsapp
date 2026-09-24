@@ -62,6 +62,7 @@ async function importConversation(db: Db, account: Account, conv: RestConversati
   return db.transaction(async (tx) => {
     const contactId = conv.participantId
       ? await resolveContact(tx, {
+          organizationId: account.organizationId,
           channel: account.channel,
           externalIds: [conv.participantId],
           name: conv.participantName ?? null,
@@ -73,6 +74,7 @@ async function importConversation(db: Db, account: Account, conv: RestConversati
     const [row] = await tx
       .insert(conversations)
       .values({
+        organizationId: account.organizationId,
         channel: account.channel,
         provider: "zernio",
         externalId: conv.id!,
@@ -85,7 +87,7 @@ async function importConversation(db: Db, account: Account, conv: RestConversati
         metadata: attribution ? { attribution } : {},
       })
       .onConflictDoUpdate({
-        target: [conversations.provider, conversations.externalId],
+        target: [conversations.organizationId, conversations.provider, conversations.externalId],
         set: {
           participantName: sql`coalesce(${conversations.participantName}, excluded.participant_name)`,
           participantPicture: sql`coalesce(excluded.participant_picture, ${conversations.participantPicture})`,
@@ -104,6 +106,7 @@ async function importConversation(db: Db, account: Account, conv: RestConversati
       const rows = await tx
         .insert(messages)
         .values({
+          organizationId: account.organizationId,
           conversationId: row.id,
           channel: account.channel,
           provider: "zernio",
@@ -115,7 +118,7 @@ async function importConversation(db: Db, account: Account, conv: RestConversati
           rawPayload: { source: "import", sentVia: m.sentVia ?? null },
           sentAt,
         })
-        .onConflictDoNothing({ target: messages.externalId, where: sql`${messages.externalId} is not null` })
+        .onConflictDoNothing({ target: [messages.organizationId, messages.externalId], where: sql`${messages.externalId} is not null` })
         .returning({ id: messages.id });
       inserted += rows.length;
     }
