@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   BarChart3,
+  Building2,
   CalendarDays,
   FileText,
   GitBranch,
@@ -70,8 +71,17 @@ function initials(value: string) {
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
 }
 
-export function Sidebar({ user }: { user: { email: string; name?: string | null; role: "admin" | "agent" } }) {
+export function Sidebar({
+  user,
+}: {
+  user: { email: string; name?: string | null; role: "admin" | "agent"; isAgencyAdmin: boolean };
+}) {
   const pathname = usePathname();
+  // El plano de agencia solo existe para el dueño del CRM. El servidor lo revalida en cada página:
+  // esconder el link no es la protección.
+  const navGroups = user.isAgencyAdmin
+    ? [...groups, { label: "Agencia", items: [{ href: "/agencia", label: "Clientes", icon: Building2 }] }]
+    : groups;
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
@@ -85,7 +95,7 @@ export function Sidebar({ user }: { user: { email: string; name?: string | null;
       </div>
 
       <nav className="flex flex-1 flex-col gap-5 overflow-y-auto">
-        {groups.map((group, i) => (
+        {navGroups.map((group, i) => (
           <div key={group.label ?? i} className="flex flex-col gap-0.5">
             {group.label && (
               <p className="mb-1.5 px-3 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-shell-muted/80">

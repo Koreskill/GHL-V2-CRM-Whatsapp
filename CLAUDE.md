@@ -62,6 +62,22 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - Contactos, Actividades y Reportes salen de `src/lib/crm/queries.ts` (datos reales, sin tablas nuevas). Calendario: reservas próximas vía API v2 de Cal.com (`CALCOM_API_KEY`, header `cal-api-version: 2024-08-13`) + página de agenda embebida desde `CALCOM_URL` (runtime, solo https). El agente recibe `CALCOM_URL` en su prompt para compartirlo cuando alguien quiere agendar.
 - Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
 
+## Plano de agencia (visión del dueño del CRM)
+
+- `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).
+- `/agencia` lista los clientes con métricas cruzadas; `/agencia/[orgId]` muestra la ficha (conversaciones, estado del agente por canal, últimas llamadas a la IA, usuarios); `/agencia/[orgId]/conversaciones/[id]` es la transcripción **solo lectura**. Desde el plano de agencia NUNCA se envía un mensaje: el único camino de salida sigue siendo `deliverMessage`.
+- Cada página valida `requireAgencyAdmin()` en el servidor. Mirar la ficha de un cliente o una conversación escribe en `audit_logs`.
+- Alta de clientes: `/agencia/nuevo` crea la organización y su primer usuario admin en un paso. El usuario se crea con la clave de servicio (`SUPABASE_SECRET_KEY`, sin prefijo `NEXT_PUBLIC_`) y queda espejado en `organization_members`. Sin esa variable la app funciona, pero el panel avisa que no puede crear usuarios.
+- La contraseña la elige o genera el dueño en el formulario y se la pasa al cliente: nunca vuelve por la URL ni se loguea.
+
+## Contraseñas y recuperación
+
+- **Una contraseña guardada no se puede mostrar.** Supabase guarda un hash: ni el cliente ni el admin ni la agencia la pueden leer. El ojo de `PasswordField` muestra lo que se está escribiendo en ese campo, nada más.
+- `/recuperar` manda el enlace por correo (`resetPasswordForEmail`, 5 pedidos por IP y 3 por email cada 15 min) y responde siempre lo mismo exista o no la cuenta. **Requiere SMTP configurado en Supabase**; sin eso el correo no sale.
+- `/auth/confirm` canjea el `token_hash` y deja la sesión de recuperación; `/recuperar/nueva` fija la contraseña y cierra la sesión. Las tres rutas son públicas en el proxy.
+- Camino alternativo cuando el correo no llega: la agencia le fija una contraseña nueva desde la ficha del cliente.
+- El usuario ES el email: no hay nombre de usuario separado que se pueda olvidar.
+
 ## Seguridad (auditoría 2026-09-23)
 
 - Roles en `auth.users.raw_app_meta_data.crm_role` (`admin` | `agent`), asignados por SQL. Sin rol no se entra (proxy, layout, login y `authorize()`). Lo de admin (Configuración, cuentas, crear plantillas, importar) se valida en el servidor con `authorize("admin")` / `requireRole("admin")`.

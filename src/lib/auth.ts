@@ -51,3 +51,10 @@ export async function requireOrgId(): Promise<string> {
   if (!session) redirect("/login");
   return session.organizationId;
 }
+
+// Plano de agencia: solo el dueño del CRM (is_agency_admin) ve y administra a los clientes.
+// Se valida en el servidor en cada página y acción, no alcanza con esconder el menú.
+export async function requireAgencyAdmin(): Promise<Session | null> {
+  const session = await getSession();
+  return session?.isAgencyAdmin ? session : null;
+}

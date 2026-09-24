@@ -11,7 +11,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar user={{ email: session.email, name, role: session.role }} />
+      <Sidebar user={{ email: session.email, name, role: session.role, isAgencyAdmin: session.isAgencyAdmin }} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
         <main className="min-h-0 flex-1 overflow-y-auto px-9 py-8">{children}</main>

@@ -4,8 +4,10 @@ import { roleOf } from "@/lib/auth";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { supabaseCookieOptions, supabaseEnv } from "@/lib/supabase/env";
 
-// Rutas que no exigen sesión: el login, lo que llama Zernio (firmado con HMAC) y los barridos (CRON_SECRET).
-const PUBLIC_PREFIXES = ["/login", "/api/webhooks/", "/webhooks/", "/api/cron/"];
+// Rutas que no exigen sesión: el login, la recuperación de contraseña (el enlace del correo llega
+// sin sesión), lo que llama Zernio (firmado con HMAC) y los barridos (CRON_SECRET).
+// /recuperar/nueva sí necesita la sesión que abre el enlace, y la valida la propia página.
+const PUBLIC_PREFIXES = ["/login", "/recuperar", "/auth/confirm", "/api/webhooks/", "/webhooks/", "/api/cron/"];
 const MACHINE_PREFIXES = ["/api/webhooks/", "/webhooks/", "/api/cron/"];
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 

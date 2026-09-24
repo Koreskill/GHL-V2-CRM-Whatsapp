@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { PasswordField } from "@/components/ui/password-field";
 import { signIn } from "./actions";
 
 export const metadata = { title: "Ingresar · Setter CRM" };
@@ -13,6 +15,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         : params.error === "limite"
           ? "Demasiados intentos. Espera unos minutos y vuelve a probar."
           : null;
+  const aviso = params.aviso === "clave_lista" ? "Contraseña actualizada. Entra con la nueva." : null;
 
   return (
     <main className="grid min-h-screen place-items-center bg-canvas px-4">
@@ -42,18 +45,11 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
             className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[14px] text-ink focus:border-primary focus:outline-none"
           />
 
-          <label className="mt-4 block text-[13px] font-medium text-ink" htmlFor="password">
-            Contraseña
-          </label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            required
-            autoComplete="current-password"
-            className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[14px] text-ink focus:border-primary focus:outline-none"
-          />
+          <PasswordField id="password" className="mt-4" />
 
+          {aviso && (
+            <p className="mt-4 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">{aviso}</p>
+          )}
           {error && <p className="mt-4 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</p>}
 
           <button
@@ -62,6 +58,15 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
           >
             Ingresar
           </button>
+
+          <div className="mt-5 border-t border-line pt-4 text-center">
+            <Link href="/recuperar" className="text-[13px] font-medium text-primary hover:underline">
+              Olvidé mi contraseña
+            </Link>
+            <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+              Tu usuario es tu email. Si no lo recuerdas, pedíselo al administrador de tu inmobiliaria.
+            </p>
+          </div>
         </form>
       </div>
     </main>
