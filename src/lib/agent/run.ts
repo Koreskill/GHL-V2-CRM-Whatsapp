@@ -6,6 +6,9 @@ import { aiChatComplete, openrouterConfigured, resolveModel } from "@/lib/ai/ope
 import { calcomBookingUrl } from "@/lib/calcom";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
+import { clearAgentTyping, setAgentTyping } from "@/lib/inbox/typing";
+import { reportIncident } from "@/lib/incidents/report";
+import { safeError } from "@/lib/safe-error";
 import { resolveAgentConfig } from "./config";
 import { TOOL_DEFINITIONS, runTool } from "./tools";
 
@@ -96,6 +99,9 @@ export async function runAgentForConversation(
 
   let reply = "";
   let handoff = false;
+  // "Escribiendo…" desde que arranca el modelo. Se limpia SIEMPRE en el finally: si una corrida
+  // muere a mitad, el indicador no puede quedar pegado. Solo se ve dentro del CRM.
+  await setAgentTyping(conversationId, conv.organizationId, db);
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       const completion = await aiChatComplete({
@@ -126,9 +132,21 @@ export async function runAgentForConversation(
       }
     }
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    console.error(`[agent] OpenAI falló en ${conversationId}:`, error);
+    // safeError: el error crudo de la llamada puede arrastrar el texto de la conversación.
+    const error = safeError(err);
+    console.error(`[agent] el modelo falló en ${conversationId}:`, error);
+    await reportIncident({
+      organizationId: conv.organizationId,
+      module: "agente",
+      key: `modelo:${modelConfig.model}`,
+      message: `El agente no pudo generar una respuesta con ${modelConfig.model}`,
+      detail: err,
+      retryTarget: null, // reintentar solo puede duplicar la respuesta: lo decide una persona
+      context: { channel: conv.channel },
+    });
     return { status: "failed", error };
+  } finally {
+    await clearAgentTyping(conversationId, conv.organizationId, db);
   }
 
   if (!reply) return { status: "skipped", reason: "empty_reply" };
@@ -143,6 +161,16 @@ export async function runAgentForConversation(
 
   // La salida va por deliverMessage: el agente no escribe en la base por su cuenta.
   const sent = await deliverMessage(conversationId, { text: reply, source: "agent" });
-  if (!sent.ok) return { status: "failed", error: sent.error };
+  if (!sent.ok) {
+    await reportIncident({
+      organizationId: conv.organizationId,
+      module: "mensajeria",
+      key: `envio:${conv.channel}`,
+      message: `No se pudo enviar la respuesta del agente por ${conv.channel}`,
+      detail: sent.error,
+      context: { channel: conv.channel },
+    });
+    return { status: "failed", error: sent.error };
+  }
   return { status: "replied", messageId: sent.message.id, handoff };
 }

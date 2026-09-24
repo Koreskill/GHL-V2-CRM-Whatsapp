@@ -4,8 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Building2,
+  Home,
   CalendarDays,
   FileText,
   GitBranch,
@@ -29,6 +31,7 @@ const groups: NavGroup[] = [
     label: "Operaciones",
     items: [
       { href: "/pipeline", label: "Pipeline", icon: GitBranch },
+      { href: "/propiedades", label: "Propiedades", icon: Home },
       { href: "/contactos", label: "Contactos", icon: Users },
       { href: "/conversaciones", label: "Conversaciones", icon: MessageCircle },
       { href: "/plantillas", label: "Plantillas", icon: FileText },
@@ -80,7 +83,16 @@ export function Sidebar({
   // El plano de agencia solo existe para el dueño del CRM. El servidor lo revalida en cada página:
   // esconder el link no es la protección.
   const navGroups = user.isAgencyAdmin
-    ? [...groups, { label: "Agencia", items: [{ href: "/agencia", label: "Clientes", icon: Building2 }] }]
+    ? [
+        ...groups,
+        {
+          label: "Agencia",
+          items: [
+            { href: "/agencia", label: "Clientes", icon: Building2 },
+            { href: "/agencia/errores", label: "Errores y logs", icon: AlertTriangle },
+          ],
+        },
+      ]
     : groups;
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);

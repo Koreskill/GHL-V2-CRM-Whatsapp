@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Bot, Check, CheckCheck, Clock, FileText, Pause, Play, SendHorizontal } from "lucide-react";
+import { AlertCircle, Bot, Check, CheckCheck, Clock, FileText, Pause, Play, RotateCcw, SendHorizontal } from "lucide-react";
 import { CHANNEL_META } from "@/components/channel-icons";
 import { dayOf, formatDayDivider, formatRemaining, formatTime } from "@/lib/format";
 import type { ChatMessage, ConversationDetail } from "@/lib/inbox/queries";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
 import { TemplatePicker } from "./template-picker";
+import { TypingBubble } from "./typing-bubble";
 
 const POLL_MS = 4000;
+// Pausa al teclear antes de avisar "escribiendo…": un aviso por pausa, no uno por tecla.
+const TYPING_DEBOUNCE_MS = 400;
 
 type LocalMessage = ChatMessage & { local?: true };
 type OutgoingPayload = { text: string } | { template: { name: string; language: string; params: string[] }; preview: string };
@@ -19,16 +22,28 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
   const router = useRouter();
   const [local, setLocal] = useState<LocalMessage[]>([]);
   const [aiEnabled, setAiEnabled] = useState(conversation.aiEnabled);
+  const [typing, setTyping] = useState({ agent: false, human: false });
   const [, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Refresco periódico: los mensajes entrantes llegan por webhook y se ven sin recargar.
+  // El mismo latido trae quién está escribiendo, así no hay un segundo temporizador.
   useEffect(() => {
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") startTransition(() => router.refresh());
-    }, POLL_MS);
-    return () => clearInterval(id);
-  }, [router]);
+    let cancelled = false;
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      startTransition(() => router.refresh());
+      const res = await fetch("/api/conversations/" + conversation.id + "/typing").catch(() => null);
+      const data = res?.ok ? await res.json().catch(() => null) : null;
+      if (!cancelled) setTyping({ agent: Boolean(data?.agent), human: Boolean(data?.human) });
+    };
+    void tick();
+    const id = setInterval(tick, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [router, conversation.id]);
 
   useEffect(() => {
     if (conversation.unreadCount === 0) return;
@@ -62,6 +77,8 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
       local: true,
     };
     setLocal((prev) => [...prev, optimistic]);
+    // Se retira el indicador en cuanto sale el mensaje, sin esperar a que venza solo.
+    pingTyping(false);
 
     const res = await fetch("/api/messages/send", {
       method: "POST",
@@ -83,6 +100,29 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
     );
     startTransition(() => router.refresh());
   }
+
+  // Reintento de un envío fallido. Solo para texto: repetir una plantilla exigiría rearmar sus
+  // variables, y mandarla con los valores equivocados es peor que no mandarla.
+  function retry(failed: LocalMessage) {
+    if (failed.type !== "text" || !failed.body) return;
+    setLocal((prev) => prev.filter((m) => m.id !== failed.id));
+    void send({ text: failed.body });
+  }
+
+  // Avisa que hay alguien del equipo escribiendo, con freno: una llamada cada TYPING_PING_MS
+  // como mucho. Lo ven los demás usuarios del CRM, no el cliente en WhatsApp.
+  // Avisa que alguien del equipo está escribiendo. El freno lo pone el composer con un debounce
+  // en un efecto: así no hace falta mirar el reloj durante el render.
+  const pingTyping = useCallback(
+    (typing: boolean) => {
+      void fetch("/api/conversations/" + conversation.id + "/typing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ typing }),
+      }).catch(() => null);
+    },
+    [conversation.id],
+  );
 
   async function toggleAi() {
     const next = !aiEnabled;
@@ -144,20 +184,31 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
                       </span>
                     </div>
                   )}
-                  <Bubble message={m} />
+                  <Bubble message={m} onRetry={m.status === "failed" ? () => retry(m) : undefined} />
                 </li>
               );
             })}
+            {/* Fuera de la lista de mensajes a propósito: es estado efímero, no historial. */}
+            {typing.agent && (
+              <li className="contents">
+                <TypingBubble who="agent" />
+              </li>
+            )}
+            {typing.human && !typing.agent && (
+              <li className="contents">
+                <TypingBubble who="human" />
+              </li>
+            )}
           </ol>
         )}
       </div>
 
-      <Composer conversation={conversation} onSend={send} />
+      <Composer conversation={conversation} onSend={send} onTyping={pingTyping} />
     </section>
   );
 }
 
-function Bubble({ message: m }: { message: LocalMessage }) {
+function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () => void }) {
   const out = m.direction === "outbound";
   const text = m.body ?? (m.type !== "text" ? `[${m.type}]` : "");
   return (
@@ -184,9 +235,20 @@ function Bubble({ message: m }: { message: LocalMessage }) {
           {formatTime(m.sentAt)}
           {out && <StatusIcon status={m.status} />}
         </span>
-        {m.status === "failed" && m.error && (
-          <span className="mt-1 flex items-start gap-1 text-[11.5px] text-accent-red">
-            <AlertCircle className="mt-px size-3.5 shrink-0" /> {m.error}
+        {m.status === "failed" && (
+          <span className="mt-1 flex flex-col gap-1 text-[11.5px] text-accent-red">
+            <span className="flex items-start gap-1">
+              <AlertCircle className="mt-px size-3.5 shrink-0" /> {m.error ?? "No se pudo enviar"}
+            </span>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex w-fit items-center gap-1 rounded-md border border-accent-red/30 px-2 py-0.5 font-medium hover:bg-accent-red/10"
+              >
+                <RotateCcw className="size-3" strokeWidth={2} /> Reintentar
+              </button>
+            )}
           </span>
         )}
       </div>
@@ -202,10 +264,26 @@ function StatusIcon({ status }: { status: string }) {
   return null;
 }
 
-function Composer({ conversation, onSend }: { conversation: ConversationDetail; onSend: (payload: OutgoingPayload) => void }) {
+function Composer({
+  conversation,
+  onSend,
+  onTyping,
+}: {
+  conversation: ConversationDetail;
+  onSend: (payload: OutgoingPayload) => void;
+  onTyping: (typing: boolean) => void;
+}) {
   const [text, setText] = useState("");
   const [picking, setPicking] = useState(false);
   const { state, expiresAt } = conversation.window;
+
+  // Debounce: un solo aviso cuando la persona hace una pausa, no uno por tecla.
+  useEffect(() => {
+    if (!text.trim()) return;
+    const id = setTimeout(() => onTyping(true), TYPING_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [text, onTyping]);
+
   const blocked = state === "template_only" || state === "closed";
   const canTemplate = conversation.channel === "whatsapp";
 

@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { roleOf } from "@/lib/auth";
+import { roleOf } from "@/lib/roles";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { supabaseCookieOptions, supabaseEnv } from "@/lib/supabase/env";
 

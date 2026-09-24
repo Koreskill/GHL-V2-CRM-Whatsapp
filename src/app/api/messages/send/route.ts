@@ -12,6 +12,9 @@ function parseTemplate(value: unknown): TemplateInput | null {
   if (typeof t.language !== "string" || !LANGUAGE.test(t.language)) return null;
   const params = t.params ?? [];
   if (!Array.isArray(params) || params.length > 20 || params.some((p) => typeof p !== "string" || p.length > 1024)) return null;
+  // Las variables se resuelven con datos REALES: una vacía dejaría un hueco o un "{{2}}" crudo
+  // en el mensaje del cliente. Se valida también acá, no solo en la interfaz.
+  if ((params as string[]).some((p) => !p.trim())) return null;
   return { name: t.name, language: t.language, params: params as string[] };
 }
 

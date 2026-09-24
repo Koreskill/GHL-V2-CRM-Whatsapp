@@ -62,6 +62,59 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - Contactos, Actividades y Reportes salen de `src/lib/crm/queries.ts` (datos reales, sin tablas nuevas). Calendario: reservas próximas vía API v2 de Cal.com (`CALCOM_API_KEY`, header `cal-api-version: 2024-08-13`) + página de agenda embebida desde `CALCOM_URL` (runtime, solo https). El agente recibe `CALCOM_URL` en su prompt para compartirlo cuando alguien quiere agendar.
 - Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
 
+## Pipeline de oportunidades (Fase 7)
+
+Jerarquía: **Contacto → Oportunidad → (varias propiedades) + (varias visitas, cada una a UNA propiedad)**.
+Si alguien pregunta por tres departamentos es UNA oportunidad con tres propiedades, no tres oportunidades. El mismo contacto puede tener otra oportunidad si más adelante busca algo distinto.
+
+- **ETAPA y ESTADO son dos ejes distintos**, igual que canal/proveedor. `stage` (las 5 del tablero) es dónde está; `status` (`abierta | ganada | perdida`) es si sigue viva. Perder NO mueve la etapa: la oportunidad conserva dónde se cayó, que es el dato que sirve para saber en qué punto se traban las ventas. Ganar sí la lleva a `cerrado_ganado`. El tablero muestra solo `abierta`.
+- **Qué busca el contacto NO se duplica en `deals`**: vive en `prospect_requirements` (operación, zonas, presupuesto, ambientes), que ya lo extrae el agente de la conversación. `deals.prospect_requirement_id` lo referencia.
+- `deal_properties` es la relación N a N con `properties` (único por `(deal_id, property_id)`). `deal_events` es el historial append-only: nunca se edita ni se borra.
+- `value` es **opcional**: el precio de una propiedad no es el valor comercial de la oportunidad para la inmobiliaria.
+- `assigned_user_id` apunta a `auth.users` **sin FK** (otro esquema, `crm_app` no lo toca). Los nombres se resuelven con la clave de servicio vía `listTeam()`; sin ella el responsable queda "Sin asignar" y el pipeline sigue andando.
+- Mover de etapa es por **selector**, no drag-and-drop: se agrega recién cuando esté comprobado que los cambios se guardan bien. La organización sale SIEMPRE de la sesión (`authorizeAction()`), nunca de un campo del formulario.
+- Prueba: `scripts/test-deals.ts` corre dentro de una transacción que se revierte (no deja filas) y valida aislamiento entre inmobiliarias, que la perdida conserva etapa y que no se duplican propiedades.
+
+## Visitas (Fase 8)
+
+Jerarquía completa: **Contacto -> Oportunidad -> (varias propiedades) + (varias visitas, cada una a UNA propiedad)**.
+
+- **Pedir una visita NO es tenerla agendada.** `solicitada` (sin fecha) y `agendada` (con `scheduled_at`) son estados distintos. Cierran en `realizada` | `no_asistio` | `cancelada`, con nota de seguimiento o motivo.
+- **Reprogramar no es un estado**: mueve `scheduled_at` y deja la fecha anterior en `visit_events`. Cancelar tampoco borra: conserva el historial.
+- Cada visita va contra una oportunidad, un contacto y UNA propiedad. `property_presentation_id` es *nullable*: solo se completa si nació de una presentación de la red, porque un asesor también carga visitas a mano.
+- El contacto sale SIEMPRE de la oportunidad en el servidor, nunca de un campo del formulario.
+
+## Propiedades y Google Sheets (Fase 9)
+
+- **La hoja es la fuente; el CRM la refleja.** No hay edición de propiedades desde el CRM: si se editara en los dos lados, los precios quedarían distintos.
+- `properties.external_id` = `property_id` de la hoja. Índice único **parcial** por `(organization_id, external_id) WHERE external_id is not null`: dos inmobiliarias pueden usar el mismo id en su hoja, y las cargadas a mano lo dejan en null sin chocar. El `ON CONFLICT` necesita el mismo `targetWhere`.
+- **Lo que desaparece de la hoja se PAUSA, no se borra**: oportunidades y visitas siguen apuntando a esa propiedad.
+- **Nunca se completa un dato por las nuestras.** Lo que falta o viene mal va a `sync_issues` y la ficha lo señala. Solo se aceptan URLs http(s): una imagen pegada dentro de una celda no sirve.
+- Dos caminos de lectura (`src/lib/sheets/client.ts`): cuenta de servicio (`GOOGLE_SERVICE_ACCOUNT_JSON`, hojas privadas, JWT RS256 firmado con node:crypto, sin SDK) o export CSV si no hay credenciales, que **exige la hoja pública**. El CSV se parsea a mano: comas y saltos de línea entre comillas son normales en una descripción.
+- Barrido: `GET /api/cron/properties` con `CRON_SECRET`, además del botón manual en Agencia.
+
+## Errores y logs (Fase 10)
+
+- `incidents` es una bandeja para RESOLVER, no un log más: mensaje claro, detalle técnico aparte, estado `nuevo -> en_revision -> resuelto` y reintento solo donde es seguro.
+- Se agrupa por `fingerprint` (sha256 de organización + módulo + clave): el mismo problema sube `occurrences` en vez de llenar la pantalla. Si vuelve a pasar algo resuelto, **se reabre**.
+- `organization_id` nullable = incidente del plano de agencia. `detail` pasa siempre por `safeError()`: nunca credenciales ni textos de mensajes.
+- Registrar un incidente NUNCA puede tumbar la operación que lo originó: todas las escrituras van con `.catch(() => {})`.
+
+## Contexto de agencia: entrar al espacio de un cliente
+
+- `getSession()` devuelve `organizationId` = la inmobiliaria **activa**, y `homeOrganizationId` = la propia del usuario. Así todas las páginas y APIs ya escritas quedan en el contexto correcto sin tocar cada una.
+- La cookie `crm_acting_org` es httpOnly y **solo se respeta si `is_agency_admin`**, revalidado contra `app_metadata` en cada request y contra la existencia de la organización. Tener la cookie no alcanza para entrar a ningún lado.
+- `ActingBanner` deja visible en TODAS las pantallas sobre qué cliente se está trabajando. Entrar y salir queda en `audit_logs`.
+- **`src/lib/roles.ts` tiene las funciones puras de rol y lo importa el proxy.** `auth.ts` toca la base, así que el proxy (runtime de edge) no puede importarlo: si lo hace, el build falla con `Can't resolve 'fs'/'net'/'tls'`. Por lo mismo, la etiqueta del equipo vive en `src/lib/team/labels.ts` y no en `deals/team.ts`, que sí va a la base.
+
+## Plantillas e indicador "escribiendo…"
+
+- Lo que se puede mandar sale del **OpenAPI de Zernio 1.62.0**, no de suposiciones: componentes `header | body | footer | buttons | carousel | limited_time_offer`; header `text | image | video | gif | document | location`; botones `quick_reply | url | phone_number | otp | copy_code | flow | mpm | catalog`. Implementados: header (texto o media), footer y los tres botones que usa una inmobiliaria. **Carrusel y oferta por tiempo limitado quedan afuera** hasta tener el indicativo de formatos.
+- El header usa su propio `{{1}}`: no comparte numeración con el cuerpo, y admite una sola variable.
+- **Una variable vacía no se envía**: se valida en la interfaz y otra vez en `/api/messages/send`, para no mandar un mensaje con un hueco o un `{{2}}` crudo.
+- **Zernio NO expone typing/presence** (verificado contra el OpenAPI): el indicador "escribiendo…" se ve SOLO dentro del CRM; la persona en WhatsApp no ve nada. Son dos capacidades distintas.
+- Es estado efímero en `conversations` (`agent_typing_since`, `human_typing_since`, `human_typing_user_id`), **nunca un mensaje**: no entra al historial. Las marcas vencidas se ignoran al leer, así una corrida caída no deja el indicador pegado. El agente lo limpia en un `finally`.
+
 ## Plano de agencia (visión del dueño del CRM)
 
 - `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).
@@ -111,6 +164,11 @@ Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` lim
 4. Bandeja: listar, abrir y responder
 5. Agente por canal (OpenRouter)
 6. Deploy en Dokploy, conexión de cuentas y barridos
+7. Pipeline de oportunidades
+8. Visitas
+9. Catálogo de propiedades sincronizado con Google Sheets
+10. Errores y logs + contexto de agencia
+11. Plantillas con encabezado, pie y botones, e indicador "escribiendo…"
 
 ## Sistema visual — Setter CRM
 

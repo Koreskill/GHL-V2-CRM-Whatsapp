@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ArrowLeft, Bot, KeyRound, MessageCircle, Users } from "lucide-react";
+import { ArrowLeft, Bot, KeyRound, LogIn, MessageCircle, Users } from "lucide-react";
 import { AgencyUsersPanel } from "@/components/agency/users-panel";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
@@ -12,6 +12,11 @@ import { getDashboard } from "@/lib/crm/queries";
 import { formatListDate } from "@/lib/format";
 import { listConversations } from "@/lib/inbox/queries";
 import { hasAdminKey } from "@/lib/supabase/admin";
+import { getCatalogSummary, getSyncConfig } from "@/lib/properties/catalog";
+import { countOpenIncidents } from "@/lib/incidents/report";
+import { countVisits } from "@/lib/visits/queries";
+import { ClientSheetPanel } from "@/components/agency/client-sheet-panel";
+import { enterClient } from "../actions";
 import { cn } from "@/lib/utils";
 
 const CHANNELS: Channel[] = ["whatsapp", "instagram", "facebook"];
@@ -49,12 +54,17 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
     target: `organization:${orgId}`,
   });
 
-  const [stats, agentState, conversations, aiActivity] = await Promise.all([
-    getDashboard(orgId),
-    getClientAgentState(orgId),
-    listConversations(orgId, { limit: 20 }),
-    listAiActivity(orgId, 12),
-  ]);
+  const [stats, agentState, conversations, aiActivity, catalog, sheet, visitCounts, openIncidents] =
+    await Promise.all([
+      getDashboard(orgId),
+      getClientAgentState(orgId),
+      listConversations(orgId, { limit: 20 }),
+      listAiActivity(orgId, 12),
+      getCatalogSummary(orgId),
+      getSyncConfig(orgId),
+      countVisits(orgId),
+      countOpenIncidents(orgId),
+    ]);
   const users = hasAdminKey() ? await listUsersByOrg(orgId).catch(() => []) : [];
 
   const globalCfg = agentState.find((a) => a.scope === "global");
@@ -65,13 +75,25 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
         title={org.name}
         subtitle={`${org.slug} · cliente ${org.status}`}
         actions={
-          <Link
-            href="/agencia"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field"
-          >
-            <ArrowLeft className="size-4" strokeWidth={1.7} />
-            Clientes
-          </Link>
+          <>
+            <Link
+              href="/agencia"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field"
+            >
+              <ArrowLeft className="size-4" strokeWidth={1.7} />
+              Clientes
+            </Link>
+            <form action={enterClient}>
+              <input type="hidden" name="organizationId" value={orgId} />
+              <button
+                type="submit"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[13.5px] font-medium text-white hover:bg-primary-hover"
+              >
+                <LogIn className="size-4" strokeWidth={1.8} />
+                Entrar a su espacio
+              </button>
+            </form>
+          </>
         }
       />
 
@@ -80,13 +102,16 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
       )}
       {error && <p className="mb-5 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</p>}
 
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {[
           { label: "Contactos", value: stats.contacts },
           { label: "Activas · 7d", value: stats.active },
           { label: "Respuestas · 30d", value: stats.replies },
           { label: "Del agente · 30d", value: stats.agent },
           { label: "Sin leer", value: stats.unread },
+          { label: "Propiedades activas", value: catalog.disponibles },
+          { label: "Visitas próximas · 7d", value: visitCounts.proximas },
+          { label: "Errores abiertos", value: openIncidents },
         ].map((m) => (
           <Card key={m.label} className="p-4">
             <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted">{m.label}</p>
@@ -206,6 +231,12 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
               configuración la cambia el administrador del cliente desde su Configuración.
             </p>
           </Card>
+
+          <ClientSheetPanel
+            orgId={orgId}
+            sheet={sheet ? { spreadsheetId: sheet.spreadsheetId, lastRunAt: sheet.lastRunAt, lastStatus: sheet.lastStatus, lastError: sheet.lastError, lastRowsUpserted: sheet.lastRowsUpserted, lastRowsSkipped: sheet.lastRowsSkipped } : null}
+            catalog={catalog}
+          />
 
           <Card>
             <div className="flex items-center gap-2 border-b border-line px-5 py-4">

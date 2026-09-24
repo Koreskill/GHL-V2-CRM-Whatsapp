@@ -6,7 +6,7 @@ import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { getDb } from "@/db";
 import { channelAccounts } from "@/db/schema";
 import { getSession } from "@/lib/auth";
-import { listTemplates, templateBody } from "@/lib/zernio/templates";
+import { listTemplates, templateBody, templateButtons, templateFooter, templateHeader } from "@/lib/zernio/templates";
 import type { WhatsAppTemplate } from "@/lib/zernio/types";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,14 @@ const STATUS: Record<string, { label: string; tone: string }> = {
   APPROVED: { label: "Aprobada", tone: "bg-accent-green/10 text-accent-green" },
   PENDING: { label: "En revisión", tone: "bg-accent-amber/10 text-accent-amber" },
   REJECTED: { label: "Rechazada", tone: "bg-accent-red/10 text-accent-red" },
+};
+// Encabezados que no son de texto: se muestra qué formato lleva la plantilla.
+const FORMAT_LABEL: Record<string, string> = {
+  image: "Con imagen",
+  video: "Con video",
+  document: "Con documento",
+  gif: "Con GIF",
+  location: "Con ubicación",
 };
 const CATEGORY: Record<string, string> = { MARKETING: "Marketing", UTILITY: "Utilidad", AUTHENTICATION: "Autenticación" };
 
@@ -114,11 +122,30 @@ function TemplateTable({ templates }: { templates: WhatsAppTemplate[] }) {
       <tbody>
         {templates.map((t) => {
           const status = STATUS[t.status ?? ""] ?? { label: t.status ?? "—", tone: "bg-field text-muted" };
+          const header = templateHeader(t);
+          const footer = templateFooter(t);
+          const btns = templateButtons(t);
           return (
             <tr key={t.id ?? `${t.name}-${t.language}`} className="border-b border-line/70 align-top last:border-0">
               <td className="px-6 py-3.5 font-medium text-ink">{t.name}</td>
               <td className="max-w-md px-4 py-3.5 text-muted">
+                {/* Encabezado, pie y botones: saber de un vistazo qué formato tiene cada plantilla. */}
+                {header && (
+                  <span className="mb-0.5 block text-[12px] font-medium text-ink">
+                    {header.format === "text" ? header.text : FORMAT_LABEL[header.format] ?? header.format}
+                  </span>
+                )}
                 <span className="line-clamp-2 whitespace-pre-wrap">{templateBody(t) || "—"}</span>
+                {footer && <span className="mt-0.5 block text-[11.5px] text-muted/80">{footer}</span>}
+                {btns.length > 0 && (
+                  <span className="mt-1 flex flex-wrap gap-1">
+                    {btns.map((b, i) => (
+                      <span key={i} className="rounded-md bg-field px-1.5 py-0.5 text-[11px] text-primary">
+                        {b.text}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </td>
               <td className="px-4 py-3.5 text-ink">{CATEGORY[t.category ?? ""] ?? t.category ?? "—"}</td>
               <td className="px-4 py-3.5 text-ink">{t.language}</td>

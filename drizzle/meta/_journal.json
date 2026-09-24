@@ -50,6 +50,34 @@
       "when": 1790267221785,
       "tag": "0006_matching_and_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790279815387,
+      "tag": "0007_deals_pipeline",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790280624169,
+      "tag": "0008_visits",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790281039054,
+      "tag": "0009_sheets_sync_and_incidents",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790281802610,
+      "tag": "0010_typing_indicator",
+      "breakpoints": true
     }
   ]
 }

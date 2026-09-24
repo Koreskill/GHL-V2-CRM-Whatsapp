@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MessageCircle, Search, Users } from "lucide-react";
+import { GitBranch, MessageCircle, Search, Users } from "lucide-react";
 import { ChannelBadge } from "@/components/channel-badge";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { parseInboxFilters } from "@/components/inbox/filters";
@@ -111,6 +111,13 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
                   <td className="px-4 py-3.5 text-muted">{c.lastMessageAt ? formatListDate(c.lastMessageAt) : "—"}</td>
                   <td className="px-6 py-3.5">
                     <span className="flex justify-end gap-1.5">
+                      <Link
+                        href={`/pipeline/nueva?contacto=${c.id}`}
+                        title="Crear una oportunidad para este contacto"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-[12.5px] text-ink hover:bg-field"
+                      >
+                        <GitBranch className="size-3.5 text-muted" strokeWidth={1.7} />
+                      </Link>
                       {c.conversations.map((cv) => {
                         const { Icon, color, label } = CHANNEL_META[cv.channel];
                         return (

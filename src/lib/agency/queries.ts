@@ -69,6 +69,7 @@ export type ClientOverview = {
   createdAt: string;
   contacts: number;
   conversations: number;
+  unread: number;
   inbound7d: number;
   outbound7d: number;
   agentReplies7d: number;
@@ -78,6 +79,12 @@ export type ClientOverview = {
   aiCalls30d: number;
   aiErrors30d: number;
   aiCostUsd30d: number;
+  openDeals: number;
+  upcomingVisits: number;
+  activeProperties: number;
+  lastSyncAt: string | null;
+  syncStatus: string | null;
+  openIncidents: number;
 };
 
 export async function listClientsOverview(): Promise<ClientOverview[]> {
@@ -89,6 +96,7 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     created_at: Date;
     contacts: number;
     conversations: number;
+    unread: number;
     inbound_7d: number;
     outbound_7d: number;
     agent_replies_7d: number;
@@ -98,11 +106,18 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     ai_calls_30d: number;
     ai_errors_30d: number;
     ai_cost_30d: string | null;
+    open_deals: number;
+    upcoming_visits: number;
+    active_properties: number;
+    last_sync_at: Date | null;
+    sync_status: string | null;
+    open_incidents: number;
   }>(sql`
     select
       o.id, o.name, o.slug, o.status, o.created_at,
       (select count(*)::int from contacts c where c.organization_id = o.id) as contacts,
       (select count(*)::int from conversations v where v.organization_id = o.id) as conversations,
+      (select coalesce(sum(unread_count),0)::int from conversations v where v.organization_id = o.id) as unread,
       (select count(*)::int from messages m where m.organization_id = o.id
          and m.direction = 'inbound' and m.sent_at >= now() - interval '7 days') as inbound_7d,
       (select count(*)::int from messages m where m.organization_id = o.id
@@ -119,7 +134,14 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
       (select count(*)::int from ai_usage_logs l where l.organization_id = o.id
          and l.status <> 'ok' and l.created_at >= now() - interval '30 days') as ai_errors_30d,
       (select coalesce(sum(l.cost_usd), 0) from ai_usage_logs l where l.organization_id = o.id
-         and l.created_at >= now() - interval '30 days') as ai_cost_30d
+         and l.created_at >= now() - interval '30 days') as ai_cost_30d,
+      (select count(*)::int from deals d where d.organization_id = o.id and d.status = 'abierta') as open_deals,
+      (select count(*)::int from visits v where v.organization_id = o.id and v.status = 'agendada'
+         and v.scheduled_at between now() and now() + interval '7 days') as upcoming_visits,
+      (select count(*)::int from properties p where p.organization_id = o.id and p.status = 'disponible') as active_properties,
+      (select last_run_at from property_sync_configs s where s.organization_id = o.id) as last_sync_at,
+      (select last_status from property_sync_configs s where s.organization_id = o.id) as sync_status,
+      (select count(*)::int from incidents i where i.organization_id = o.id and i.status <> 'resuelto') as open_incidents
     from organizations o
     order by o.name
   `);
@@ -132,6 +154,7 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     createdAt: r.created_at.toISOString(),
     contacts: r.contacts,
     conversations: r.conversations,
+    unread: r.unread,
     inbound7d: r.inbound_7d,
     outbound7d: r.outbound_7d,
     agentReplies7d: r.agent_replies_7d,
@@ -141,6 +164,12 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     aiCalls30d: r.ai_calls_30d,
     aiErrors30d: r.ai_errors_30d,
     aiCostUsd30d: Number(r.ai_cost_30d ?? 0),
+    openDeals: r.open_deals,
+    upcomingVisits: r.upcoming_visits,
+    activeProperties: r.active_properties,
+    lastSyncAt: r.last_sync_at ? new Date(r.last_sync_at).toISOString() : null,
+    syncStatus: r.sync_status,
+    openIncidents: r.open_incidents,
   }));
 }
 

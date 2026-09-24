@@ -2,41 +2,78 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { getUser } from "@/lib/supabase/server";
+import { readActingOrgCookie } from "@/lib/agency/context";
+import { isAgencyAdmin, orgOf, roleOf, type Role } from "@/lib/roles";
 
-// El rol vive en app_metadata: solo se puede escribir con la service key o por SQL, nunca desde el cliente.
-// Un usuario sin rol (por ejemplo, alguien que se registró solo) no entra.
-export type Role = "admin" | "agent";
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function roleOf(user: Pick<User, "app_metadata"> | null | undefined): Role | null {
-  const role = user?.app_metadata?.crm_role;
-  return role === "admin" || role === "agent" ? role : null;
-}
-
-// El tenant vive en app_metadata: resolución rápida (también en el proxy) sin ir a la base.
-export function orgOf(user: Pick<User, "app_metadata"> | null | undefined): string | null {
-  const org = user?.app_metadata?.organization_id;
-  return typeof org === "string" && UUID.test(org) ? org : null;
-}
-
-// El admin de la agencia opera en un plano separado: puede actuar sobre cualquier inmobiliaria
-// (con cambio de contexto explícito y auditado). Solo se setea por SQL/service key.
-export function isAgencyAdmin(user: Pick<User, "app_metadata"> | null | undefined): boolean {
-  return user?.app_metadata?.is_agency_admin === true;
-}
+// Se reexportan para no romper lo que ya las importaba desde acá.
+export { isAgencyAdmin, orgOf, roleOf };
+export type { Role };
 
 // Sin rol Y sin organización no se entra: toda query necesita saber a qué inmobiliaria pertenece.
-export type Session = { user: User; email: string; role: Role; organizationId: string; isAgencyAdmin: boolean };
+//
+// `organizationId` es la inmobiliaria ACTIVA: sobre la que se lee y se escribe. Para un usuario
+// normal es siempre la suya. Para el admin de la agencia puede ser la de un cliente, cuando entró
+// a su espacio desde /agencia. Así todas las páginas y APIs quedan dentro del contexto correcto
+// sin que cada una tenga que acordarse.
+//
+// `homeOrganizationId` es la propia del usuario, la de su app_metadata. Nunca cambia.
+export type Session = {
+  user: User;
+  email: string;
+  role: Role;
+  organizationId: string;
+  homeOrganizationId: string;
+  actingAsClient: boolean;
+  isAgencyAdmin: boolean;
+};
 
 // cache(): dedup por request. El layout y cada página piden la sesión sin revalidar el token varias veces.
 export const getSession = cache(async (): Promise<Session | null> => {
   const user = await getUser();
   const role = roleOf(user);
-  const organizationId = orgOf(user);
-  if (!user?.email || !role || !organizationId) return null;
-  return { user, email: user.email, role, organizationId, isAgencyAdmin: isAgencyAdmin(user) };
+  const homeOrganizationId = orgOf(user);
+  if (!user?.email || !role || !homeOrganizationId) return null;
+
+  const agencyAdmin = isAgencyAdmin(user);
+  let organizationId = homeOrganizationId;
+  let actingAsClient = false;
+
+  // La cookie de contexto SOLO vale para el admin de la agencia y solo si la inmobiliaria existe.
+  // Un usuario normal que se fabrique la cookie sigue viendo únicamente lo suyo.
+  if (agencyAdmin) {
+    const acting = await readActingOrgCookie();
+    if (acting && acting !== homeOrganizationId && (await organizationExists(acting))) {
+      organizationId = acting;
+      actingAsClient = true;
+    }
+  }
+
+  return {
+    user,
+    email: user.email,
+    role,
+    organizationId,
+    homeOrganizationId,
+    actingAsClient,
+    isAgencyAdmin: agencyAdmin,
+  };
 });
+
+// Import perezoso: auth.ts lo carga el proxy, que corre en el runtime de edge y no debería
+// arrastrar el cliente de Postgres salvo que de verdad haga falta resolver un cambio de contexto.
+async function organizationExists(orgId: string): Promise<boolean> {
+  try {
+    const [{ getDb }, { organizations }, { eq }] = await Promise.all([
+      import("@/db"),
+      import("@/db/schema"),
+      import("drizzle-orm"),
+    ]);
+    const [row] = await getDb().select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId));
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
 
 export async function requireRole(role: Role): Promise<Session | null> {
   const session = await getSession();

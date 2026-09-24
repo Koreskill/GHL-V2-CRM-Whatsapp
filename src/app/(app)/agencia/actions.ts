@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createOrganization, slugTaken, writeAudit } from "@/lib/agency/queries";
 import { createClientUser, deleteClientUser, setUserPassword } from "@/lib/agency/users";
 import { toSlug } from "@/lib/agency/slug";
+import { writeActingOrgCookie } from "@/lib/agency/context";
 import { requireAgencyAdmin } from "@/lib/auth";
 import { isUuid } from "@/lib/api";
 import { hasAdminKey } from "@/lib/supabase/admin";
@@ -12,7 +13,7 @@ import { hasAdminKey } from "@/lib/supabase/admin";
 const MAX = 320;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-const field = (form: FormData, key: string) => String(form.get(key) ?? "").trim().slice(0, MAX);
+const field = (form: FormData, key: string, max = MAX) => String(form.get(key) ?? "").trim().slice(0, max);
 
 function fail(path: string, motivo: string): never {
   redirect(`${path}?error=${encodeURIComponent(motivo)}`);
@@ -147,4 +148,152 @@ export async function removeClientUser(formData: FormData) {
   });
   revalidatePath(back);
   redirect(`${back}?usuario=eliminado`);
+}
+
+// ─── Cambio de contexto: entrar al espacio de un cliente ────────────────────
+// El admin de la agencia sigue siendo él: no se hace pasar por un usuario del cliente. Lo que
+// cambia es sobre qué inmobiliaria opera, y cada entrada y salida queda en audit_logs.
+export async function enterClient(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) redirect("/agencia");
+
+  await writeActingOrgCookie(orgId);
+  await writeAudit({
+    actorUserId: session.user.id,
+    actingAsOrganizationId: orgId,
+    action: "context_enter",
+    target: `organization:${orgId}`,
+  });
+
+  // Se invalida todo: cada página tiene que volver a leer con la organización nueva.
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
+export async function exitClient() {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const previous = session.actingAsClient ? session.organizationId : null;
+
+  await writeActingOrgCookie(null);
+  if (previous) {
+    await writeAudit({
+      actorUserId: session.user.id,
+      actingAsOrganizationId: previous,
+      action: "context_exit",
+      target: `organization:${previous}`,
+    });
+  }
+
+  revalidatePath("/", "layout");
+  redirect("/agencia");
+}
+
+// Sincronización manual de la cartera de un cliente, desde Agencia.
+export async function syncClientProperties(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) redirect("/agencia");
+  const back = `/agencia/${orgId}`;
+
+  const { syncPropertiesFromSheet } = await import("@/lib/sheets/properties-sync");
+  const result = await syncPropertiesFromSheet(orgId);
+
+  await writeAudit({
+    actorUserId: session.user.id,
+    actingAsOrganizationId: orgId,
+    action: "sheets_sync_manual",
+    target: `organization:${orgId}`,
+    metadata: { ok: result.ok, upserted: result.upserted, skipped: result.skipped },
+  });
+
+  revalidatePath(back);
+  revalidatePath("/propiedades");
+  if (!result.ok) fail(back, result.error ?? "La sincronización falló");
+  redirect(`${back}?sync=${result.upserted}`);
+}
+
+// Conectar (o cambiar) la hoja de Google de un cliente.
+export async function saveSheetConfig(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) redirect("/agencia");
+  const back = `/agencia/${orgId}`;
+
+  const raw = field(formData, "spreadsheet", 500);
+  const { parseSpreadsheetRef } = await import("@/lib/sheets/client");
+  const ref = parseSpreadsheetRef(raw);
+  if (!ref) fail(back, "Pega la URL de la hoja de Google o su identificador.");
+
+  const { getDb } = await import("@/db");
+  const { propertySyncConfigs } = await import("@/db/schema");
+  const { sql } = await import("drizzle-orm");
+
+  await getDb()
+    .insert(propertySyncConfigs)
+    .values({ organizationId: orgId, spreadsheetId: ref.spreadsheetId, sheetGid: ref.gid, enabled: true })
+    .onConflictDoUpdate({
+      target: propertySyncConfigs.organizationId,
+      set: { spreadsheetId: ref.spreadsheetId, sheetGid: ref.gid, enabled: true, updatedAt: sql`now()` },
+    });
+
+  await writeAudit({
+    actorUserId: session.user.id,
+    actingAsOrganizationId: orgId,
+    action: "sheets_config",
+    target: `organization:${orgId}`,
+  });
+
+  revalidatePath(back);
+  redirect(`${back}?hoja=guardada`);
+}
+
+// Estado de un incidente en la bandeja de Errores y logs.
+export async function updateIncident(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const id = field(formData, "incidentId", 64);
+  const status = field(formData, "status", 20);
+  if (!isUuid(id) || !["nuevo", "en_revision", "resuelto"].includes(status)) redirect("/agencia/errores");
+
+  const { setIncidentStatus } = await import("@/lib/incidents/report");
+  await setIncidentStatus(id, status as "nuevo" | "en_revision" | "resuelto");
+
+  await writeAudit({
+    actorUserId: session.user.id,
+    action: "incident_status",
+    target: `incident:${id}`,
+    metadata: { status },
+  });
+  revalidatePath("/agencia/errores");
+  redirect("/agencia/errores");
+}
+
+// Reintento de lo que sea seguro reintentar. Hoy: la sincronización de la hoja.
+export async function retryIncident(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const id = field(formData, "incidentId", 64);
+  const orgId = field(formData, "organizationId");
+  const target = field(formData, "retryTarget", 60);
+  if (!isUuid(id)) redirect("/agencia/errores");
+
+  if (target === "sheets:sync" && isUuid(orgId)) {
+    const { syncPropertiesFromSheet } = await import("@/lib/sheets/properties-sync");
+    await syncPropertiesFromSheet(orgId);
+  }
+
+  await writeAudit({
+    actorUserId: session.user.id,
+    actingAsOrganizationId: isUuid(orgId) ? orgId : null,
+    action: "incident_retry",
+    target: `incident:${id}`,
+    metadata: { retryTarget: target },
+  });
+  revalidatePath("/agencia/errores");
+  redirect("/agencia/errores");
 }

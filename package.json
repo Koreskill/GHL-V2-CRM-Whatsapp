@@ -14,7 +14,7 @@
     "db:counts": "tsx scripts/db-counts.ts",
     "zernio:openapi": "node scripts/zernio-openapi.mjs && openapi-typescript openapi/zernio.slim.json -o src/lib/zernio/openapi.d.ts",
     "zernio:check": "tsx scripts/zernio-check.ts",
-    "test": "tsx scripts/test-signature.ts && tsx scripts/test-units.ts",
+    "test": "tsx scripts/test-signature.ts && tsx scripts/test-units.ts && tsx scripts/test-catalog.ts && tsx scripts/test-deals.ts && tsx scripts/test-visits.ts && tsx scripts/test-sync.ts",
     "zernio:webhook": "tsx scripts/zernio-webhook.ts",
     "test:e2e": "tsx scripts/test-webhook-e2e.ts",
     "test:network": "tsx scripts/test-network-flow.ts",

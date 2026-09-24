@@ -128,18 +128,28 @@ export default async function AgenciaPage() {
                       )}
                       {" · última actividad "}
                       {c.lastMessageAt ? formatListDate(c.lastMessageAt) : "nunca"}
+                      {" · cartera "}
+                      {c.syncStatus === "error" ? (
+                        <span className="text-accent-red">sincronización con error</span>
+                      ) : c.lastSyncAt ? (
+                        `sincronizada ${formatListDate(c.lastSyncAt)}`
+                      ) : (
+                        "sin hoja conectada"
+                      )}
                     </p>
                   </div>
 
-                  <div className="flex shrink-0 gap-7">
-                    <Metric label="Contactos" value={c.contacts} />
+                  <div className="flex shrink-0 flex-wrap gap-x-6 gap-y-3">
                     <Metric label="Conversaciones" value={c.conversations} />
-                    <Metric label="Entrantes 7d" value={c.inbound7d} />
+                    <Metric label="Sin leer" value={c.unread} />
+                    <Metric label="Oportunidades" value={c.openDeals} />
+                    <Metric label="Visitas 7d" value={c.upcomingVisits} />
+                    <Metric label="Propiedades" value={c.activeProperties} />
                     <Metric label="Agente 7d" value={c.agentReplies7d} />
                     <Metric
-                      label="IA 30d"
-                      value={c.aiCostUsd30d > 0 ? `US$ ${c.aiCostUsd30d.toFixed(2)}` : `${c.aiCalls30d}`}
-                      tone={c.aiErrors30d > 0 ? "text-accent-amber" : undefined}
+                      label="Errores"
+                      value={c.openIncidents}
+                      tone={c.openIncidents > 0 ? "text-accent-red" : undefined}
                     />
                   </div>
                 </div>
