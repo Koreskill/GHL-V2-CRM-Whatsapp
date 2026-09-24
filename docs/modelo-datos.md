@@ -380,12 +380,20 @@ Sin avanzar si la fase previa no compila (`typecheck`, `lint`, `build`).
    (`agent/run.ts`) ya no llama a OpenAI directo: pasa por este servicio. `OPENROUTER_API_KEY`
    + `OPENROUTER_MODEL` server-side. `agent_configs.model` (por canal) actúa como
    fallback de `resolveModel`.
-5. **Prospectos y matching:** `prospect_requirements` (extracción con IA),
-   motor de `property_matches`.
-6. **Atribución:** `property_presentations` + regla de notificación al dueño en
-   `visita_solicitada`.
-7. **Plano de agencia:** cambio de contexto explícito + auditoría; vistas
-   cross-tenant para el admin de la agencia.
+5. ✅ **Prospectos y matching (HECHA — migración `0006_matching_and_attribution`):**
+   `prospect_requirements` + `property_matches`. `src/lib/matching/score.ts` (scoring
+   determinista y testeado: operación/tipo/precio/must-have excluyen, zona/ambientes
+   suman) y `src/lib/matching/queries.ts` (`extractRequirements` con IA función
+   `extraccion`, `runMatching` contra `listNetworkCatalog`, `listMatches`).
+6. ✅ **Atribución (HECHA — migración `0006`):** `property_presentations`.
+   `src/lib/presentations/queries.ts`: `createPresentation` (exige membresía activa y
+   que el prospecto sea contacto del tenant; snapshot de comisión), `requestVisit`
+   (recién acá `owner_notified_at` = ahora), `updatePresentationStatus` (ambas partes),
+   `listPresentations` (visible para dueño y presentador).
+7. ✅ **Plano de agencia (HECHA):** `is_agency_admin` en `app_metadata` + `Session`.
+   `src/lib/agency/queries.ts`: `resolveActiveOrg` (el admin de agencia puede pasar un
+   orgId explícito, con `context_switch` auditado en `audit_logs`), `writeAudit`,
+   `listOrganizations`, `listAuditLogs`. **Falta UI** del plano de agencia.
 
 ### Puente de transición (Fases 1–2) y endurecimiento
 

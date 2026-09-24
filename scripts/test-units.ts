@@ -5,6 +5,7 @@ import { clientIp, rateLimit } from "../src/lib/rate-limit";
 import { safeError } from "../src/lib/safe-error";
 import { computeWindow } from "../src/lib/inbox/window";
 import { renderTemplate, templateParamCount } from "../src/lib/zernio/templates";
+import { scoreMatch, type MatchCandidate, type MatchRequirement } from "../src/lib/matching/score";
 
 const H = 3_600_000;
 const now = Date.parse("2026-09-23T12:00:00Z");
@@ -75,5 +76,39 @@ const dbErr = new Error('Failed query: insert into "contacts" ("name","phone") v
 assert.ok(!safeError(dbErr).includes("5493410000000") && !safeError(dbErr).includes("Juan"), "sin teléfono ni nombre");
 const pgErr = Object.assign(new Error("Failed query: ...\nparams: secreto"), { cause: { code: "23505", message: "duplicate key value" } });
 assert.equal(safeError(pgErr), "23505 duplicate key value");
+
+// Matching: operación distinta excluye; precio fuera de rango o must-have faltante excluyen.
+const baseReq: MatchRequirement = {
+  operation: "venta",
+  propertyTypes: ["departamento"],
+  zones: ["Palermo"],
+  bedroomsMin: 2,
+  bathroomsMin: null,
+  priceMin: 100000,
+  priceMax: 200000,
+  areaMin: null,
+  mustHave: ["cochera"],
+  niceToHave: ["balcon"],
+};
+const baseCand: MatchCandidate = {
+  operation: "venta",
+  propertyType: "departamento",
+  price: 150000,
+  zone: "Palermo",
+  bedrooms: 3,
+  bathrooms: 2,
+  areaM2: 80,
+  features: { cochera: true, balcon: true },
+};
+const good = scoreMatch(baseReq, baseCand);
+assert.equal(good.excluded, false, "candidato ideal no se excluye");
+assert.ok(good.score > 0.9, `score alto para match casi perfecto (fue ${good.score})`);
+assert.equal(scoreMatch(baseReq, { ...baseCand, operation: "alquiler" }).excluded, true, "operación distinta excluye");
+assert.equal(scoreMatch(baseReq, { ...baseCand, price: 500000 }).excluded, true, "precio fuera de rango excluye");
+assert.equal(scoreMatch(baseReq, { ...baseCand, features: { balcon: true } }).excluded, true, "falta un must-have: excluye");
+assert.equal(scoreMatch(baseReq, { ...baseCand, propertyType: "casa" }).excluded, true, "tipo fuera de lo buscado excluye");
+const otherZone = scoreMatch(baseReq, { ...baseCand, zone: "Belgrano" });
+assert.equal(otherZone.excluded, false, "otra zona no excluye, solo baja el score");
+assert.ok(otherZone.score < good.score, "zona distinta puntúa menos");
 
 console.log("units: OK");

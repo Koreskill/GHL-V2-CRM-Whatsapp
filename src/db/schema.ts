@@ -60,6 +60,18 @@ export const aiFunctionEnum = pgEnum("ai_function", [
   "fallback",
 ]);
 export const aiCallStatusEnum = pgEnum("ai_call_status", ["ok", "error", "timeout"]);
+// Fase 5 — Matching
+export const matchStatusEnum = pgEnum("match_status", ["sugerida", "presentada", "descartada"]);
+// Fase 6 — Atribución
+export const presentationStatusEnum = pgEnum("presentation_status", [
+  "presentada",
+  "visita_solicitada",
+  "visita_agendada",
+  "negociando",
+  "cerrada_ganada",
+  "cerrada_perdida",
+  "cancelada",
+]);
 
 export type Channel = (typeof channelEnum.enumValues)[number];
 export type Provider = (typeof providerEnum.enumValues)[number];
@@ -432,4 +444,103 @@ export const aiUsageLogs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("ai_usage_logs_org_created_idx").on(t.organizationId, t.createdAt)],
+);
+
+// ─── Fase 5: Prospectos y matching ──────────────────────────────────────────
+// Perfil estructurado del prospecto extraído de la conversación. NUNCA sale del tenant.
+export const prospectRequirements = pgTable(
+  "prospect_requirements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    operation: operationTypeEnum("operation"),
+    propertyTypes: jsonb("property_types").$type<string[]>().notNull().default([]),
+    zones: jsonb("zones").$type<string[]>().notNull().default([]),
+    bedroomsMin: integer("bedrooms_min"),
+    bathroomsMin: integer("bathrooms_min"),
+    priceMin: numeric("price_min", { precision: 14, scale: 2 }),
+    priceMax: numeric("price_max", { precision: 14, scale: 2 }),
+    currency: text("currency").notNull().default("USD"),
+    areaMin: numeric("area_min"),
+    mustHave: jsonb("must_have").$type<string[]>().notNull().default([]),
+    niceToHave: jsonb("nice_to_have").$type<string[]>().notNull().default([]),
+    rawExtraction: jsonb("raw_extraction").$type<Record<string, unknown>>(),
+    confidence: numeric("confidence"),
+    status: text("status").notNull().default("activo"),
+    ...timestamps,
+  },
+  (t) => [
+    index("prospect_requirements_org_idx").on(t.organizationId, t.status),
+    index("prospect_requirements_contact_idx").on(t.contactId),
+  ],
+);
+
+// Resultado del cruce perfil <-> catálogo de red. Privado del tenant del prospecto.
+export const propertyMatches = pgTable(
+  "property_matches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    prospectRequirementId: uuid("prospect_requirement_id")
+      .notNull()
+      .references(() => prospectRequirements.id, { onDelete: "cascade" }),
+    networkPropertyListingId: uuid("network_property_listing_id")
+      .notNull()
+      .references(() => networkPropertyListings.id, { onDelete: "cascade" }),
+    score: numeric("score").notNull(),
+    reasons: jsonb("reasons").$type<{ factor: string; peso: number; detalle: string }[]>().notNull().default([]),
+    status: matchStatusEnum("status").notNull().default("sugerida"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("property_matches_req_listing_key").on(t.prospectRequirementId, t.networkPropertyListingId),
+    index("property_matches_org_idx").on(t.organizationId),
+  ],
+);
+
+// ─── Fase 6: Atribución comercial ───────────────────────────────────────────
+// Único punto donde se tocan dos tenants: solo IDs, estado y condiciones. Sin datos privados.
+export const propertyPresentations = pgTable(
+  "property_presentations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    networkId: uuid("network_id")
+      .notNull()
+      .references(() => networks.id, { onDelete: "cascade" }),
+    networkPropertyListingId: uuid("network_property_listing_id")
+      .notNull()
+      .references(() => networkPropertyListings.id, { onDelete: "cascade" }),
+    ownerOrganizationId: uuid("owner_organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    presentingOrganizationId: uuid("presenting_organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    prospectContactId: uuid("prospect_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    prospectRequirementId: uuid("prospect_requirement_id").references(() => prospectRequirements.id, { onDelete: "set null" }),
+    matchId: uuid("match_id").references(() => propertyMatches.id, { onDelete: "set null" }),
+    status: presentationStatusEnum("status").notNull().default("presentada"),
+    presentedAt: timestamp("presented_at", { withTimezone: true }).notNull().defaultNow(),
+    visitRequestedAt: timestamp("visit_requested_at", { withTimezone: true }),
+    // null hasta que el prospecto pide visita: recién ahí se notifica/coordina con el dueño.
+    ownerNotifiedAt: timestamp("owner_notified_at", { withTimezone: true }),
+    commissionTerms: jsonb("commission_terms").$type<Record<string, unknown>>().notNull().default({}),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [
+    index("property_presentations_owner_idx").on(t.ownerOrganizationId),
+    index("property_presentations_presenting_idx").on(t.presentingOrganizationId),
+    index("property_presentations_listing_idx").on(t.networkPropertyListingId),
+  ],
 );

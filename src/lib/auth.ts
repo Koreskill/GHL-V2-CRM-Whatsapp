@@ -20,8 +20,14 @@ export function orgOf(user: Pick<User, "app_metadata"> | null | undefined): stri
   return typeof org === "string" && UUID.test(org) ? org : null;
 }
 
+// El admin de la agencia opera en un plano separado: puede actuar sobre cualquier inmobiliaria
+// (con cambio de contexto explícito y auditado). Solo se setea por SQL/service key.
+export function isAgencyAdmin(user: Pick<User, "app_metadata"> | null | undefined): boolean {
+  return user?.app_metadata?.is_agency_admin === true;
+}
+
 // Sin rol Y sin organización no se entra: toda query necesita saber a qué inmobiliaria pertenece.
-export type Session = { user: User; email: string; role: Role; organizationId: string };
+export type Session = { user: User; email: string; role: Role; organizationId: string; isAgencyAdmin: boolean };
 
 // cache(): dedup por request. El layout y cada página piden la sesión sin revalidar el token varias veces.
 export const getSession = cache(async (): Promise<Session | null> => {
@@ -29,7 +35,7 @@ export const getSession = cache(async (): Promise<Session | null> => {
   const role = roleOf(user);
   const organizationId = orgOf(user);
   if (!user?.email || !role || !organizationId) return null;
-  return { user, email: user.email, role, organizationId };
+  return { user, email: user.email, role, organizationId, isAgencyAdmin: isAgencyAdmin(user) };
 });
 
 export async function requireRole(role: Role): Promise<Session | null> {
