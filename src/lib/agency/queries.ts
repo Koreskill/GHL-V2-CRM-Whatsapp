@@ -87,13 +87,17 @@ export type ClientOverview = {
   openIncidents: number;
 };
 
+// Las filas de SQL crudo pueden traer timestamptz como string, aunque las consultas
+// tipadas de Drizzle lo conviertan a Date. Aceptamos ambas formas al serializar.
+const toIso = (value: string | Date) => new Date(value).toISOString();
+
 export async function listClientsOverview(): Promise<ClientOverview[]> {
   const rows = await getDb().execute<{
     id: string;
     name: string;
     slug: string;
     status: string;
-    created_at: Date;
+    created_at: string | Date;
     contacts: number;
     conversations: number;
     unread: number;
@@ -102,14 +106,14 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     agent_replies_7d: number;
     agent_channels_on: number;
     accounts: number;
-    last_message_at: Date | null;
+    last_message_at: string | Date | null;
     ai_calls_30d: number;
     ai_errors_30d: number;
     ai_cost_30d: string | null;
     open_deals: number;
     upcoming_visits: number;
     active_properties: number;
-    last_sync_at: Date | null;
+    last_sync_at: string | Date | null;
     sync_status: string | null;
     open_incidents: number;
   }>(sql`
@@ -151,7 +155,7 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     name: r.name,
     slug: r.slug,
     status: r.status,
-    createdAt: r.created_at.toISOString(),
+    createdAt: toIso(r.created_at),
     contacts: r.contacts,
     conversations: r.conversations,
     unread: r.unread,
@@ -160,14 +164,14 @@ export async function listClientsOverview(): Promise<ClientOverview[]> {
     agentReplies7d: r.agent_replies_7d,
     agentChannelsOn: r.agent_channels_on,
     accounts: r.accounts,
-    lastMessageAt: r.last_message_at?.toISOString() ?? null,
+    lastMessageAt: r.last_message_at ? toIso(r.last_message_at) : null,
     aiCalls30d: r.ai_calls_30d,
     aiErrors30d: r.ai_errors_30d,
     aiCostUsd30d: Number(r.ai_cost_30d ?? 0),
     openDeals: r.open_deals,
     upcomingVisits: r.upcoming_visits,
     activeProperties: r.active_properties,
-    lastSyncAt: r.last_sync_at ? new Date(r.last_sync_at).toISOString() : null,
+    lastSyncAt: r.last_sync_at ? toIso(r.last_sync_at) : null,
     syncStatus: r.sync_status,
     openIncidents: r.open_incidents,
   }));
