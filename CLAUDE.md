@@ -58,7 +58,7 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - Supabase se usa solo del lado del servidor: `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` SIN prefijo `NEXT_PUBLIC_`, así se leen en runtime. Con `NEXT_PUBLIC_` Next las incrusta al compilar la imagen y en Dokploy quedan vacías. No agregar variables `NEXT_PUBLIC_*` salvo que un componente de cliente las necesite, y en ese caso van como Build Args.
 - Ventana: `src/lib/inbox/window.ts` (`open | human_agent | template_only | closed`). El agente IA solo responde con `open`; `human_agent` es solo para personas.
 - `deliverMessage` inserta una fila `pending`, usa su id como `Idempotency-Key`, y si el webhook `message.sent` ganó la carrera (violación de único) borra la pendiente y conserva la del webhook.
-- Agente: `runAgentForConversation(conversationId, { triggerMessageId })`. Corta si hay un mensaje posterior al disparador (antes y después de llamar a OpenAI), así dos mensajes seguidos del cliente reciben una sola respuesta.
+- Agente: `triageIncomingMessage(conversationId, { triggerMessageId })` (ver Fase 12). Corta si hay un mensaje posterior al disparador, antes y después de llamar al modelo, así dos mensajes seguidos del cliente reciben una sola respuesta.
 - Contactos, Actividades y Reportes salen de `src/lib/crm/queries.ts` (datos reales, sin tablas nuevas). Calendario: reservas próximas vía API v2 de Cal.com (`CALCOM_API_KEY`, header `cal-api-version: 2024-08-13`) + página de agenda embebida desde `CALCOM_URL` (runtime, solo https). El agente recibe `CALCOM_URL` en su prompt para compartirlo cuando alguien quiere agendar.
 - Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
 
@@ -115,6 +115,47 @@ Jerarquía completa: **Contacto -> Oportunidad -> (varias propiedades) + (varias
 - **Zernio NO expone typing/presence** (verificado contra el OpenAPI): el indicador "escribiendo…" se ve SOLO dentro del CRM; la persona en WhatsApp no ve nada. Son dos capacidades distintas.
 - Es estado efímero en `conversations` (`agent_typing_since`, `human_typing_since`, `human_typing_user_id`), **nunca un mensaje**: no entra al historial. Las marcas vencidas se ignoran al leer, así una corrida caída no deja el indicador pegado. El agente lo limpia en un `finally`.
 
+## Triaje de mensajes: Jev clasifica, GPT redacta (Fase 12)
+
+Un mensaje entrante pasa por cuatro pasos, y cada uno tiene UNA responsabilidad:
+
+1. **Jev clasifica** (Decisions API) y devuelve decisiones tipadas con probabilidades. **No redacta.**
+2. **El código elige la ruta** con una tabla determinista (`triage/routes.ts`). El modelo nunca elige la ruta: si pudiera, un reclamo podría recibir un pitch comercial.
+3. **GPT redacta** siguiendo esa ruta. **No vuelve a decidir la categoría.**
+4. La app valida, aplica las reglas de envío y registra todo.
+
+### Decisions API
+
+- Es un endpoint **aparte** del de chat: `POST https://openrouter.ai/api/alpha/decisions`, no `/v1/chat/completions`. Por eso NO se usa el SDK de OpenAI, va con fetch nativo como el cliente de Zernio.
+- Tipado contra `openapi/openrouter-decisions.yaml`, descargado de la documentación oficial. Si un campo no está ahí, no existe: no inventarlo.
+- Tres primitivas: `noul` (¿se cumple?), `choice` (¿cuál?), `score` (¿dónde cae en una escala ordenada?).
+- **`noul` NO trae `confidence`**: solo `choice` y `score`. **`score` viene ponderado por probabilidad** (1.99 con tres niveles), no como entero: hay que redondear.
+- `usage` cuenta `input_tokens`/`output_tokens`, no `prompt_tokens`/`completion_tokens`.
+- Se registra en `ai_usage_logs` con función `calificacion`, igual que cualquier otra llamada a IA.
+
+### Orden de la política de rutas (no es arbitrario)
+
+Spam → pedido de persona → reclamo → `requires_human` alto → confianza baja → visita detectada → intención principal.
+Una opción fuera del catálogo o una respuesta ilegible **no se enrutan a ciegas**: van a revisión. Sin `confidence` se asume 0, que fuerza revisión en vez de dar la decisión por buena.
+
+### Reglas de envío
+
+- `requires_human`, confianza por debajo del umbral, o GPT sin datos verificados → **borrador + derivación**, nunca envío.
+- **Derivar pausa la IA en el hilo** (`conversations.ai_enabled = false`), como hacía la herramienta `handoff_to_human`, que quedó reemplazada por `requires_human`.
+- El envío sigue saliendo por `deliverMessage`: **un solo camino de salida**. El borrador se carga en el campo de escritura para que una persona lo lea y lo mande; no se envía desde el panel.
+- `message_triage.message_id` es **único**: es la garantía de que el mismo mensaje no se clasifica ni se contesta dos veces, aunque el webhook reintente. Se reclama la fila ANTES de gastar un token.
+
+### Configuración
+
+- Modo de envío (`auto | borrador | off`), umbrales y modelo de clasificación viven en `agent_configs`, con la misma cascada canal → global → default. No repartidos por el código.
+- `OPENROUTER_DECISION_MODEL` (default `typesafe/jev-1.13`) y `OPENROUTER_API_KEY`, siempre server-side.
+- **Los umbrales por defecto (0.60 y 0.50) NO están calibrados**: son un punto de partida. `npm run triage:calibrar -- mensajes.json` los ajusta con mensajes reales y mide cuántos reclamos se escapan. Con menos de ~100 mensajes por categoría el número es orientativo.
+- `response_format: json_schema` se pide, pero **OpenRouter aclara que depende del modelo y del proveedor**: el resultado se valida campo por campo igual, y se acepta JSON envuelto en ```json.
+
+### Aislamiento
+
+El contexto se arma en `triage/context.ts` y TODO se filtra por `organizationId`. Las **notas internas y los documentos de una propiedad no entran al prompt**: son privados del equipo y no tienen por qué pasar por un modelo que después le escribe al cliente. Cada ficha lleva `datosFaltantes`: es exactamente lo que el modelo NO puede afirmar.
+
 ## Plano de agencia (visión del dueño del CRM)
 
 - `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).
@@ -169,6 +210,7 @@ Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` lim
 9. Catálogo de propiedades sincronizado con Google Sheets
 10. Errores y logs + contexto de agencia
 11. Plantillas con encabezado, pie y botones, e indicador "escribiendo…"
+12. Triaje de mensajes: Jev clasifica, el código enruta y GPT redacta
 
 ## Sistema visual — Setter CRM
 

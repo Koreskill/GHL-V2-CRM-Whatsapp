@@ -26,12 +26,50 @@ export async function saveAgentConfig(formData: FormData) {
   // `global` no tiene interruptor propio: cada canal se prende o apaga por separado.
   const enabled = scope === "global" ? true : formData.get("enabled") === "on";
 
+  // Política de respuesta automática. Null = hereda de global; el 0 es un valor válido y no se
+  // puede confundir con "vacío", así que se compara contra cadena vacía, no con truthiness.
+  const AUTO_REPLY = new Set(["auto", "borrador", "off"]);
+  const autoReplyRaw = String(formData.get("autoReply") ?? "").trim();
+  const autoReply = AUTO_REPLY.has(autoReplyRaw) ? autoReplyRaw : null;
+
+  const ratio = (key: string): string | null => {
+    const raw = String(formData.get(key) ?? "").trim().replace(",", ".");
+    if (raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? String(n) : null;
+  };
+  const minConfidence = ratio("minConfidence");
+  const humanThreshold = ratio("humanThreshold");
+  const decisionModelRaw = String(formData.get("decisionModel") ?? "").trim();
+  const decisionModel = decisionModelRaw && MODEL_RE.test(decisionModelRaw) ? decisionModelRaw : null;
+
   await getDb()
     .insert(agentConfigs)
-    .values({ organizationId: session.organizationId, scope, enabled, systemPrompt: prompt || null, model, enabledTools: tools })
+    .values({
+      organizationId: session.organizationId,
+      scope,
+      enabled,
+      systemPrompt: prompt || null,
+      model,
+      enabledTools: tools,
+      autoReply,
+      minConfidence,
+      humanThreshold,
+      decisionModel,
+    })
     .onConflictDoUpdate({
       target: [agentConfigs.organizationId, agentConfigs.scope],
-      set: { enabled, systemPrompt: prompt || null, model, enabledTools: tools, updatedAt: sql`now()` },
+      set: {
+        enabled,
+        systemPrompt: prompt || null,
+        model,
+        enabledTools: tools,
+        autoReply,
+        minConfidence,
+        humanThreshold,
+        decisionModel,
+        updatedAt: sql`now()`,
+      },
     });
 
   revalidatePath("/configuracion");

@@ -9,7 +9,6 @@ import { getDb } from "@/db";
 import { agentConfigs, channelAccounts } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
 import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "@/lib/agent/config";
-import { TOOL_LABELS, TOOL_NAMES } from "@/lib/agent/tools";
 import { cn } from "@/lib/utils";
 import { saveAgentConfig } from "./actions";
 
@@ -86,7 +85,6 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
   const inherited = isGlobal
     ? { systemPrompt: DEFAULT_SYSTEM_PROMPT, model: DEFAULT_MODEL() }
     : mergeAgentConfig(undefined, globalRow);
-  const tools = row?.enabledTools ?? (isGlobal ? [...TOOL_NAMES] : mergeAgentConfig(undefined, globalRow).tools);
 
   return (
     <>
@@ -151,19 +149,99 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
               />
             </div>
 
-            <fieldset>
-              <legend className="text-[15px] font-semibold text-ink">Herramientas</legend>
-              <p className="mb-3 text-[13px] text-muted">Qué puede hacer el agente además de responder.</p>
-              {TOOL_NAMES.map((t) => (
-                <label key={t} className="flex items-start gap-3 rounded-lg border border-line p-3">
-                  <input type="checkbox" name="tools" value={t} defaultChecked={tools.includes(t)} className="mt-0.5 size-4 accent-[var(--color-primary)]" />
-                  <span>
-                    <span className="block text-[13.5px] font-medium text-ink">{TOOL_LABELS[t].label}</span>
-                    <span className="block text-[12.5px] text-muted">{TOOL_LABELS[t].description}</span>
-                  </span>
+            <div>
+              <p className="text-[15px] font-semibold text-ink">Derivación a una persona</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-muted">
+                Es automática: el clasificador evalúa cada mensaje y, ante un reclamo, un pedido de hablar con
+                alguien, un asunto delicado o poca certeza, prepara un borrador y pausa la IA en esa
+                conversación en vez de responder. El umbral se ajusta más abajo.
+              </p>
+            </div>
+          </div>
+
+          {/* Política de respuesta automática. Los umbrales viven acá, no repartidos por el
+              código: son decisión de cada inmobiliaria y se calibran con mensajes reales. */}
+          <div className="p-6">
+            <p className="text-[15px] font-semibold text-ink">Respuesta automática</p>
+            <p className="mb-4 text-[13px] text-muted">
+              Antes de responder, un modelo clasifica el mensaje y el sistema elige el flujo. Un reclamo o un
+              pedido de hablar con una persona nunca reciben respuesta automática.
+            </p>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label htmlFor="autoReply" className="block text-[13.5px] font-medium text-ink">
+                  Modo de envío
                 </label>
-              ))}
-            </fieldset>
+                <select
+                  id="autoReply"
+                  name="autoReply"
+                  defaultValue={row?.autoReply ?? ""}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink focus:border-primary focus:outline-none"
+                >
+                  <option value="">{isGlobal ? "Automático (por defecto)" : "Heredar de General"}</option>
+                  <option value="auto">Automático: responde solo</option>
+                  <option value="borrador">Borrador: prepara y espera revisión</option>
+                  <option value="off">Apagado: no redacta nada</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="decisionModel" className="block text-[13.5px] font-medium text-ink">
+                  Modelo de clasificación
+                </label>
+                <input
+                  id="decisionModel"
+                  name="decisionModel"
+                  defaultValue={row?.decisionModel ?? ""}
+                  placeholder="typesafe/jev-1.13"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink placeholder:text-muted/70 focus:border-primary focus:outline-none"
+                />
+                <p className="mt-1.5 text-[12px] text-muted">
+                  Usa la Decisions API, no la de chat. Vacío usa OPENROUTER_DECISION_MODEL.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="minConfidence" className="block text-[13.5px] font-medium text-ink">
+                  Confianza mínima
+                </label>
+                <input
+                  id="minConfidence"
+                  name="minConfidence"
+                  inputMode="decimal"
+                  defaultValue={row?.minConfidence ?? ""}
+                  placeholder="0.60"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink placeholder:text-muted/70 focus:border-primary focus:outline-none"
+                />
+                <p className="mt-1.5 text-[12px] text-muted">
+                  Entre 0 y 1. Por debajo, el agente pide una aclaración en vez de suponer qué necesita.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="humanThreshold" className="block text-[13.5px] font-medium text-ink">
+                  Umbral de derivación
+                </label>
+                <input
+                  id="humanThreshold"
+                  name="humanThreshold"
+                  inputMode="decimal"
+                  defaultValue={row?.humanThreshold ?? ""}
+                  placeholder="0.50"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink placeholder:text-muted/70 focus:border-primary focus:outline-none"
+                />
+                <p className="mt-1.5 text-[12px] text-muted">
+                  Cuánta señal de «esto lo tiene que ver una persona» alcanza para derivar. Más bajo, más cauto.
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-4 rounded-lg bg-field px-3 py-2 text-[12.5px] leading-relaxed text-muted">
+              Los valores por defecto (0.60 y 0.50) son un punto de partida, no un número calibrado. Para
+              ajustarlos con mensajes reales de esta inmobiliaria:{" "}
+              <code className="text-[12px]">npx tsx scripts/triage-calibrar.ts mensajes.json</code>
+            </p>
           </div>
 
           <div className="flex items-center justify-end gap-3 p-4">

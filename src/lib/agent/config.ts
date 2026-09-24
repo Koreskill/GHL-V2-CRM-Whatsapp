@@ -15,7 +15,10 @@ export const DEFAULT_MODEL = () => process.env.OPENROUTER_MODEL || "openai/gpt-4
 export type ResolvedAgentConfig = {
   enabled: boolean;
   systemPrompt: string;
+  /** Modelo que REDACTA. Null en la config = default del código. */
   model: string;
+  /** Modelo que CLASIFICA (Jev). Null = se resuelve por ai_model_configs o por el env. */
+  decisionModel: string | null;
   tools: ToolName[];
 };
 
@@ -23,7 +26,7 @@ type Row = typeof agentConfigs.$inferSelect;
 
 // Cascada: config del canal -> config global -> default del código. `enabled` es solo del canal.
 export function mergeAgentConfig(channelRow: Row | undefined, globalRow: Row | undefined): ResolvedAgentConfig {
-  const pick = <K extends "systemPrompt" | "model" | "enabledTools">(key: K) => {
+  const pick = <K extends "systemPrompt" | "model" | "decisionModel" | "enabledTools">(key: K) => {
     const v = channelRow?.[key];
     const hasValue = Array.isArray(v) ? true : typeof v === "string" ? v.trim() !== "" : v != null;
     return hasValue ? v : globalRow?.[key];
@@ -33,6 +36,7 @@ export function mergeAgentConfig(channelRow: Row | undefined, globalRow: Row | u
     enabled: channelRow?.enabled ?? false,
     systemPrompt: (pick("systemPrompt") as string | null | undefined)?.trim() || DEFAULT_SYSTEM_PROMPT,
     model: (pick("model") as string | null | undefined)?.trim() || DEFAULT_MODEL(),
+    decisionModel: (pick("decisionModel") as string | null | undefined)?.trim() || null,
     tools: tools.filter((t): t is ToolName => (TOOL_NAMES as readonly string[]).includes(t)),
   };
 }

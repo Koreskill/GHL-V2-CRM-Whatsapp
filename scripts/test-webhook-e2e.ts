@@ -12,7 +12,7 @@ import { channelAccounts, contactIdentities, contacts, conversations, messages, 
 import type { WebhookMessageReceived, WebhookMessageStatus } from "../src/lib/zernio/types";
 import { getConversation, listConversations, listMessages } from "../src/lib/inbox/queries";
 import { deliverMessage } from "../src/lib/inbox/deliver";
-import { runAgentForConversation } from "../src/lib/agent/run";
+import { triageIncomingMessage } from "../src/lib/agent/triage/run";
 import { getReport, listActivity, listContacts } from "../src/lib/crm/queries";
 import { DEFAULT_ORG_ID as ORG } from "../src/lib/tenancy";
 
@@ -142,12 +142,12 @@ async function main() {
     assert.equal(detail?.window.state, "open", "ventana abierta tras un entrante");
     assert.equal((await listMessages(conv.id, ORG)).length, 1);
 
-    // ---- Agente (Fase 5): interruptores, sin llamar a OpenAI ----
+    // ---- Triaje: interruptores, sin llamar a ningún modelo ----
     process.env.OPENROUTER_API_KEY = "";
     const trigger = msgs[0].id;
-    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "openrouter_key_missing" }, "pasa los dos interruptores y la ventana");
+    assert.deepEqual(await triageIncomingMessage(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "openrouter_key_missing" }, "pasa los dos interruptores y la ventana");
     await db.update(conversations).set({ aiEnabled: false }).where(eq(conversations.id, conv.id));
-    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "conversation_ai_off" });
+    assert.deepEqual(await triageIncomingMessage(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "conversation_ai_off" });
     await db.update(conversations).set({ aiEnabled: true }).where(eq(conversations.id, conv.id));
 
     // ---- deliverMessage: Zernio rechaza la cuenta falsa -> fila persistida como failed ----
@@ -157,7 +157,7 @@ async function main() {
     const [failedRow] = await db.select().from(messages).where(eq(messages.id, (!failed.ok && failed.message?.id) || ""));
     assert.equal(failedRow?.status, "failed");
     assert.equal(failedRow?.direction, "outbound");
-    assert.deepEqual(await runAgentForConversation(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "superseded" }, "después de una respuesta, el agente no contesta");
+    assert.deepEqual(await triageIncomingMessage(conv.id, { triggerMessageId: trigger }), { status: "skipped", reason: "superseded" }, "después de una respuesta, el agente no contesta");
 
     // ---- Ventana cerrada: WhatsApp fuera de 24 h no deja enviar texto ----
     await db.update(conversations).set({ lastInboundAt: new Date(Date.now() - 25 * 3_600_000) }).where(eq(conversations.id, conv.id));

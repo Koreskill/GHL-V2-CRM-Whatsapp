@@ -325,6 +325,17 @@ export const agentConfigs = pgTable(
     systemPrompt: text("system_prompt"),
     enabledTools: text("enabled_tools").array(),
     model: text("model"),
+    // ── Política de respuesta automática (Fase 12) ──
+    // Los umbrales y el modo de envío viven acá, no repartidos por el código: son política de
+    // cada inmobiliaria. Null = hereda de 'global' y, si tampoco está, del default del código.
+    // auto = envía sola | borrador = siempre deja borrador para revisar | off = no responde.
+    autoReply: text("auto_reply"),
+    // Confianza mínima de Jev en la intención para enrutar sin pedir aclaración.
+    minConfidence: numeric("min_confidence"),
+    // Probabilidad de requires_human desde la que se deriva, aunque la intención sea comercial.
+    humanThreshold: numeric("human_threshold"),
+    // Modelo de clasificación (Jev). Separado de `model`, que es el que redacta.
+    decisionModel: text("decision_model"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow()
@@ -822,3 +833,67 @@ export const incidents = pgTable(
 
 export type IncidentStatus = (typeof incidentStatusEnum.enumValues)[number];
 export type IncidentSeverity = (typeof incidentSeverityEnum.enumValues)[number];
+
+// ─── Fase 12: Triaje de mensajes (Jev + GPT) ────────────────────────────────
+// Una fila por mensaje entrante procesado. `message_id` es ÚNICO: es la garantía de que el
+// mismo mensaje no se clasifica ni se contesta dos veces, aunque el webhook reintente.
+export const triageStatusEnum = pgEnum("triage_status", [
+  "enviado", // se respondió automáticamente
+  "borrador", // quedó un borrador para que lo revise una persona
+  "derivado", // requiere intervención humana
+  "descartado", // spam o nada que responder
+  "error", // falló la clasificación o la redacción
+]);
+
+export const messageTriage = pgTable(
+  "message_triage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+
+    // ── Clasificación (Jev) ──
+    intent: text("intent"),
+    intentConfidence: numeric("intent_confidence"),
+    // Todas las probabilidades, no solo la elegida: sin esto no se puede recalibrar un umbral.
+    intentProbabilities: jsonb("intent_probabilities").$type<Record<string, number>>().notNull().default({}),
+    containsVisitRequest: numeric("contains_visit_request"),
+    requiresHuman: numeric("requires_human"),
+    urgency: text("urgency"),
+    decisionModel: text("decision_model"),
+    decisionId: text("decision_id"), // id de la llamada en OpenRouter, para rastrearla
+
+    // ── Ruta (código, no modelo) ──
+    route: text("route"),
+    routeReason: text("route_reason"),
+
+    // ── Redacción (GPT) ──
+    replyModel: text("reply_model"),
+    draftText: text("draft_text"),
+    internalSummary: text("internal_summary"),
+    missingInformation: jsonb("missing_information").$type<string[]>().notNull().default([]),
+    suggestedCrmUpdates: jsonb("suggested_crm_updates").$type<Record<string, unknown>>().notNull().default({}),
+    handoffReason: text("handoff_reason"),
+
+    // ── Resultado ──
+    status: triageStatusEnum("status").notNull(),
+    sentMessageId: uuid("sent_message_id").references(() => messages.id, { onDelete: "set null" }),
+    error: text("error"), // sin claves ni datos personales: safeError()
+    ...timestamps,
+  },
+  (t) => [
+    // At-most-once por mensaje entrante.
+    uniqueIndex("message_triage_message_key").on(t.messageId),
+    index("message_triage_org_status_idx").on(t.organizationId, t.status, t.createdAt),
+    index("message_triage_conversation_idx").on(t.conversationId),
+  ],
+);
+
+export type TriageStatus = (typeof triageStatusEnum.enumValues)[number];

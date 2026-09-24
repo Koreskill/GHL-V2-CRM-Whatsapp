@@ -34,12 +34,15 @@ function scheduleAgent(result: IngestResult | null) {
   if (result?.kind !== "message" || !result.inbound || !result.inserted || !result.messageId) return;
   const { conversationId, messageId } = result;
   after(async () => {
-    // Import dinámico: el grafo del agente (OpenAI incluido) no entra en el cold start del webhook.
-    const { runAgentForConversation } = await import("@/lib/agent/run");
-    const outcome = await runAgentForConversation(conversationId, { triggerMessageId: messageId }).catch(
-      (err: unknown) => ({ status: "failed" as const, error: safeError(err) }),
+    // Import dinámico: el grafo del agente no entra en el cold start del webhook.
+    // Triaje: Jev clasifica, el código enruta y GPT redacta. La idempotencia la garantiza
+    // el índice único de message_triage sobre message_id, no este bloque.
+    const { triageIncomingMessage } = await import("@/lib/agent/triage/run");
+    const outcome = await triageIncomingMessage(conversationId, { triggerMessageId: messageId }).catch(
+      (err: unknown) => ({ status: "error" as const, error: safeError(err) }),
     );
-    console.log(`[agent] ${conversationId}:`, outcome);
+    // Sin el texto del mensaje ni lo que escribió el modelo: solo el resultado.
+    console.log(`[triaje] ${conversationId}:`, outcome);
   });
 }
 

@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
 import { TemplatePicker } from "./template-picker";
 import { TypingBubble } from "./typing-bubble";
+import { TriagePanel } from "./triage-panel";
+import type { TriageRow } from "@/lib/agent/triage/queries";
 
 const POLL_MS = 4000;
 // Pausa al teclear antes de avisar "escribiendo…": un aviso por pausa, no uno por tecla.
@@ -18,11 +20,23 @@ const TYPING_DEBOUNCE_MS = 400;
 type LocalMessage = ChatMessage & { local?: true };
 type OutgoingPayload = { text: string } | { template: { name: string; language: string; params: string[] }; preview: string };
 
-export function ChatView({ conversation, messages }: { conversation: ConversationDetail; messages: ChatMessage[] }) {
+export function ChatView({
+  conversation,
+  messages,
+  triage,
+}: {
+  conversation: ConversationDetail;
+  messages: ChatMessage[];
+  triage: TriageRow | null;
+}) {
   const router = useRouter();
   const [local, setLocal] = useState<LocalMessage[]>([]);
   const [aiEnabled, setAiEnabled] = useState(conversation.aiEnabled);
   const [typing, setTyping] = useState({ agent: false, human: false });
+  // El texto del campo de escritura vive acá para que el borrador del agente se pueda cargar
+  // con un setState, sin un efecto que sincronice. El borrador NO se envía solo.
+  const [text, setText] = useState("");
+  const [triageHidden, setTriageHidden] = useState(false);
   const [, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -168,6 +182,24 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
         </button>
       </header>
 
+      {triage && !triageHidden && (
+        <TriagePanel
+          triage={triage}
+          onUseDraft={(draft) => {
+            setText(draft);
+            setTriageHidden(true);
+          }}
+          onDismiss={() => {
+            setTriageHidden(true);
+            void fetch("/api/conversations/" + conversation.id + "/triage", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ triageId: triage.id, action: "descartar" }),
+            }).catch(() => null);
+          }}
+        />
+      )}
+
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         {all.length === 0 ? (
           <p className="mt-10 text-center text-[13px] text-muted">Todavía no hay mensajes en esta conversación.</p>
@@ -203,7 +235,7 @@ export function ChatView({ conversation, messages }: { conversation: Conversatio
         )}
       </div>
 
-      <Composer conversation={conversation} onSend={send} onTyping={pingTyping} />
+      <Composer conversation={conversation} onSend={send} onTyping={pingTyping} text={text} setText={setText} />
     </section>
   );
 }
@@ -268,12 +300,15 @@ function Composer({
   conversation,
   onSend,
   onTyping,
+  text,
+  setText,
 }: {
   conversation: ConversationDetail;
   onSend: (payload: OutgoingPayload) => void;
   onTyping: (typing: boolean) => void;
+  text: string;
+  setText: (value: string) => void;
 }) {
-  const [text, setText] = useState("");
   const [picking, setPicking] = useState(false);
   const { state, expiresAt } = conversation.window;
 

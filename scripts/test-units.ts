@@ -23,13 +23,30 @@ assert.equal(computeWindow("instagram", null, now).state, "closed");
 assert.equal(computeWindow("whatsapp", ago(1), now).expiresAt, new Date(now + 23 * H).toISOString());
 
 // Cascada canal -> global -> default
-const row = (scope: string, p: Partial<{ enabled: boolean; systemPrompt: string | null; model: string | null; enabledTools: string[] | null }>) => ({
+const row = (
+  scope: string,
+  p: Partial<{
+    enabled: boolean;
+    systemPrompt: string | null;
+    model: string | null;
+    enabledTools: string[] | null;
+    autoReply: string | null;
+    minConfidence: string | null;
+    humanThreshold: string | null;
+    decisionModel: string | null;
+  }>,
+) => ({
   organizationId: "00000000-0000-0000-0000-000000000001",
   scope,
   enabled: p.enabled ?? false,
   systemPrompt: p.systemPrompt ?? null,
   model: p.model ?? null,
   enabledTools: p.enabledTools ?? null,
+  // Política de respuesta automática: null en el fixture = hereda, que es lo que prueba la cascada.
+  autoReply: p.autoReply ?? null,
+  minConfidence: p.minConfidence ?? null,
+  humanThreshold: p.humanThreshold ?? null,
+  decisionModel: p.decisionModel ?? null,
   updatedAt: new Date(),
 });
 const global = row("global", { enabled: true, systemPrompt: "GLOBAL", model: "gpt-global", enabledTools: [] });

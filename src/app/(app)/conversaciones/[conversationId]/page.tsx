@@ -5,6 +5,7 @@ import { parseInboxFilters } from "@/components/inbox/filters";
 import { isUuid } from "@/lib/api";
 import { requireOrgId } from "@/lib/auth";
 import { countConversations, getConversation, listConversations, listMessages } from "@/lib/inbox/queries";
+import { getLatestTriage } from "@/lib/agent/triage/queries";
 
 export default async function ConversationPage({ params, searchParams }: PageProps<"/conversaciones/[conversationId]">) {
   const { conversationId } = await params;
@@ -12,18 +13,19 @@ export default async function ConversationPage({ params, searchParams }: PagePro
   const orgId = await requireOrgId();
   const filters = parseInboxFilters(await searchParams);
 
-  const [conversation, messages, items, total] = await Promise.all([
+  const [conversation, messages, items, total, triage] = await Promise.all([
     getConversation(conversationId, orgId),
     listMessages(conversationId, orgId),
     listConversations(orgId, filters),
     countConversations(orgId),
+    getLatestTriage(conversationId, orgId),
   ]);
   if (!conversation) notFound();
 
   return (
     <div className="-mx-9 -my-8 flex h-[calc(100%+4rem)]">
       <ConversationList items={items} total={total} filters={filters} activeId={conversationId} />
-      <ChatView key={conversationId} conversation={conversation} messages={messages} />
+      <ChatView key={conversationId} conversation={conversation} messages={messages} triage={triage} />
     </div>
   );
 }
