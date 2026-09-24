@@ -47,6 +47,7 @@ function scheduleAgent(result: IngestResult | null) {
 }
 
 export async function POST(req: Request) {
+  const receivedAt = Date.now();
   // Un evento de Zernio pesa unos KB: un body gigante es abuso, se corta antes de leerlo.
   if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
     return Response.json({ error: "payload_too_large" }, { status: 413 });
@@ -85,6 +86,16 @@ export async function POST(req: Request) {
 
   // 3-4. Rutear por cuenta, resolver contacto, conversación y mensaje (INSERTs, inline).
   const result = await processEvent(db, eventId, payload);
+
+  if (payload.event === "message.received") {
+    const sourceAt = Date.parse(payload.timestamp);
+    console.info("[zernio] mensaje entrante", {
+      eventId,
+      sourceToWebhookMs: Number.isFinite(sourceAt) ? receivedAt - sourceAt : null,
+      ingestMs: Date.now() - receivedAt,
+      ingested: result?.kind === "message" && result.inserted,
+    });
+  }
 
   // 5. El agente, después de responder.
   scheduleAgent(result);

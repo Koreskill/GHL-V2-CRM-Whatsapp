@@ -7,7 +7,16 @@ import { readChoice, readNoul, readScore, type DecisionAnswer } from "../src/lib
 import { LABELED_EXAMPLES } from "../src/lib/agent/triage/examples";
 import { INTENTS, URGENCY_LEVELS } from "../src/lib/agent/triage/questions";
 import { DEFAULT_POLICY, routeFor, type Decision } from "../src/lib/agent/triage/routes";
-import { __parseReplyForTests as parseReply } from "../src/lib/agent/triage/generate";
+import { __parseReplyForTests as parseReply, REPLY_SCHEMA } from "../src/lib/agent/triage/generate";
+
+// El proveedor rechaza todo el pedido si un objeto del JSON Schema estricto queda abierto.
+function checkStrictObjects(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  const schema = value as Record<string, unknown>;
+  if (schema.type === "object") assert.equal(schema.additionalProperties, false);
+  for (const child of Object.values(schema)) checkStrictObjects(child);
+}
+checkStrictObjects(REPLY_SCHEMA);
 
 // Triaje SIN llamar a ningún modelo: la tabla de rutas es determinista, así que se prueba sola.
 // La calidad de la clasificación de Jev se mide aparte, con scripts/triage-calibrar.ts.
@@ -127,12 +136,13 @@ for (const intent of ["complaint", "human_request"] as const) {
       reply_text: "Hola Ana, te paso los datos.",
       internal_summary: "Consulta por Thames 1500",
       missing_information: ["expensas"],
-      suggested_crm_updates: { zona: "Palermo" },
+      suggested_crm_updates: [{ campo: "zona", valor: "Palermo" }],
       handoff_reason: null,
     }),
   );
   assert.equal(ok?.reply_text, "Hola Ana, te paso los datos.");
   assert.deepEqual(ok?.missing_information, ["expensas"]);
+  assert.deepEqual(ok?.suggested_crm_updates, { zona: "Palermo" });
   assert.equal(ok?.handoff_reason, null);
 
   // Envuelto en ```json: varios proveedores lo devuelven así aunque se pida structured output.

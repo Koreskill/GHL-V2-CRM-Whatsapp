@@ -50,9 +50,17 @@ const REPLY_SCHEMA = {
       description: "Datos que hicieron falta y no estaban en el contexto.",
     },
     suggested_crm_updates: {
-      type: "object",
-      additionalProperties: true,
-      description: "Datos nuevos que surgieron del mensaje y convendría registrar. Solo sugerencia.",
+      type: "array",
+      description: "Datos nuevos que surgieron del mensaje y convendría registrar. Solo sugerencias, sin inventar datos.",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["campo", "valor"],
+        properties: {
+          campo: { type: "string" },
+          valor: { type: "string" },
+        },
+      },
     },
     handoff_reason: {
       type: ["string", "null"],
@@ -148,8 +156,17 @@ function parseReply(raw: string): GeneratedReply | null {
     missing_information: Array.isArray(p.missing_information)
       ? p.missing_information.filter((x): x is string => typeof x === "string").slice(0, 10)
       : [],
-    suggested_crm_updates:
-      p.suggested_crm_updates && typeof p.suggested_crm_updates === "object" && !Array.isArray(p.suggested_crm_updates)
+    suggested_crm_updates: Array.isArray(p.suggested_crm_updates)
+      ? Object.fromEntries(
+          p.suggested_crm_updates
+            .filter((item): item is { campo: string; valor: string } =>
+              Boolean(item) && typeof item === "object" &&
+              typeof item.campo === "string" && typeof item.valor === "string" && Boolean(item.campo.trim()),
+            )
+            .slice(0, 20)
+            .map((item) => [item.campo.trim(), item.valor.trim()]),
+        )
+      : p.suggested_crm_updates && typeof p.suggested_crm_updates === "object"
         ? (p.suggested_crm_updates as Record<string, unknown>)
         : {},
     handoff_reason: typeof p.handoff_reason === "string" && p.handoff_reason.trim() ? p.handoff_reason.trim().slice(0, 300) : null,
@@ -181,8 +198,7 @@ export async function generateReply(input: {
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        // Si el proveedor no soporta json_schema, OpenRouter lo ignora o falla; el parseo
-        // tolerante de abajo cubre las dos situaciones.
+        // Todos los objetos del esquema estricto deben cerrar additionalProperties.
         response_format: {
           type: "json_schema",
           json_schema: { name: "respuesta_inmobiliaria", strict: true, schema: REPLY_SCHEMA },

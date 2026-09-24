@@ -40,13 +40,11 @@ export function ChatView({
   const [, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Refresco periódico: los mensajes entrantes llegan por webhook y se ven sin recargar.
-  // El mismo latido trae quién está escribiendo, así no hay un segundo temporizador.
+  // La lista de conversaciones refresca mensajes y triaje; acá solo se consulta quién escribe.
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       if (document.visibilityState !== "visible") return;
-      startTransition(() => router.refresh());
       const res = await fetch("/api/conversations/" + conversation.id + "/typing").catch(() => null);
       const data = res?.ok ? await res.json().catch(() => null) : null;
       if (!cancelled) setTyping({ agent: Boolean(data?.agent), human: Boolean(data?.human) });

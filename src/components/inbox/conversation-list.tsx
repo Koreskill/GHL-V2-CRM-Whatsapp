@@ -6,6 +6,7 @@ import { formatListDate } from "@/lib/format";
 import type { ConversationListItem } from "@/lib/inbox/queries";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
+import { InboxAutoRefresh } from "./inbox-auto-refresh";
 
 const CHANNELS: Channel[] = ["whatsapp", "instagram", "facebook"];
 
@@ -34,6 +35,7 @@ export function ConversationList({
 
   return (
     <section className="flex w-[360px] shrink-0 flex-col border-r border-line bg-card">
+      <InboxAutoRefresh />
       <div className="border-b border-line p-5">
         <div className="flex items-center gap-2">
           <h1 className="text-[18px] font-semibold text-ink">Conversaciones</h1>
