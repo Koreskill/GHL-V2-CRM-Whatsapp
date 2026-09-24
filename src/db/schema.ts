@@ -86,6 +86,13 @@ export const visitStatusEnum = pgEnum("visit_status", [
   "cancelada",
 ]);
 
+// Fase 13 — Etiquetado del contacto
+// Cuán cerca está de operar. Ordenado a propósito: se puede pedir como score a Jev.
+export const leadTemperatureEnum = pgEnum("lead_temperature", ["frio", "tibio", "caliente"]);
+// Cuándo necesita resolver. También ordenado, de menos a más urgente.
+export const urgencyEnum = pgEnum("prospect_urgency", ["explorando", "meses", "ya"]);
+export const paymentMethodEnum = pgEnum("payment_method", ["contado", "credito"]);
+
 export const presentationStatusEnum = pgEnum("presentation_status", [
   "presentada",
   "visita_solicitada",
@@ -181,6 +188,11 @@ export const auditLogs = pgTable("audit_logs", {
 
 export const contacts = pgTable("contacts", {
   id: uuid("id").primaryKey().defaultRandom(),
+  // ── Fase 13: calificación ──
+  // Va en el contacto, no en la conversación: la temperatura es de la persona, aunque escriba
+  // por WhatsApp y por Instagram. Null = todavía sin clasificar.
+  temperature: leadTemperatureEnum("temperature"),
+  temperatureAt: timestamp("temperature_at", { withTimezone: true }),
   organizationId: uuid("organization_id")
     .notNull()
     .references(() => organizations.id, { onDelete: "cascade" }),
@@ -406,6 +418,11 @@ export const properties = pgTable(
     sourceUrl: text("source_url"), // enlace original del aviso
     externalUpdatedAt: timestamp("external_updated_at", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
+    // ok | error | pendiente. Por propiedad, no por hoja: una fila puede fallar y el resto no.
+    syncStatus: text("sync_status"),
+    // Si tiene fecha, alguien la editó a mano y la sincronización NO la pisa, hasta que se
+    // marque explícitamente "volver a tomar de la fuente" (que lo vuelve a poner en null).
+    manuallyEditedAt: timestamp("manually_edited_at", { withTimezone: true }),
     // Qué faltó o vino mal en la última sincronización. La ficha lo señala en vez de inventarlo.
     syncIssues: jsonb("sync_issues").$type<string[]>().notNull().default([]),
     internalNotes: text("internal_notes"), // privado, nunca sale del tenant
@@ -535,6 +552,13 @@ export const prospectRequirements = pgTable(
     areaMin: numeric("area_min"),
     mustHave: jsonb("must_have").$type<string[]>().notNull().default([]),
     niceToHave: jsonb("nice_to_have").$type<string[]>().notNull().default([]),
+    // ── Fase 13 ──
+    // Las tres las decide Jev como preguntas tipadas; el resto de los campos de arriba los
+    // extrae GPT, porque son valores libres que una pregunta de opciones no puede devolver.
+    urgency: urgencyEnum("urgency"),
+    paymentMethod: paymentMethodEnum("payment_method"),
+    // Libre: Infonavit, Fovissste, bancario, hipotecario UVA… cambia según el país.
+    creditType: text("credit_type"),
     rawExtraction: jsonb("raw_extraction").$type<Record<string, unknown>>(),
     confidence: numeric("confidence"),
     status: text("status").notNull().default("activo"),
@@ -668,6 +692,11 @@ export const dealProperties = pgTable(
       .notNull()
       .references(() => properties.id, { onDelete: "cascade" }),
     addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+    // ── Fase 13: interesados por propiedad ──
+    // Que exista la fila = se la mostramos. La temperatura = qué tan concreto fue el interés.
+    // Null mientras solo se la mostramos y todavía no dijo nada.
+    interest: leadTemperatureEnum("interest"),
+    lastInterestAt: timestamp("last_interest_at", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("deal_properties_deal_property_key").on(t.dealId, t.propertyId),
@@ -885,6 +914,8 @@ export const messageTriage = pgTable(
     // ── Resultado ──
     status: triageStatusEnum("status").notNull(),
     sentMessageId: uuid("sent_message_id").references(() => messages.id, { onDelete: "set null" }),
+    // Cuándo lo vio alguien del equipo. Null = sin ver; es lo que cuenta la campanita.
+    seenAt: timestamp("seen_at", { withTimezone: true }),
     error: text("error"), // sin claves ni datos personales: safeError()
     ...timestamps,
   },
@@ -897,3 +928,7 @@ export const messageTriage = pgTable(
 );
 
 export type TriageStatus = (typeof triageStatusEnum.enumValues)[number];
+
+export type LeadTemperature = (typeof leadTemperatureEnum.enumValues)[number];
+export type ProspectUrgency = (typeof urgencyEnum.enumValues)[number];
+export type PaymentMethod = (typeof paymentMethodEnum.enumValues)[number];

@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { AlertTriangle, Building2, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, Building2, Plus, RefreshCw, Search } from "lucide-react";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { requireOrgId } from "@/lib/auth";
 import { formatListDate } from "@/lib/format";
 import { countCatalog, getSyncConfig, listCatalog, listZones, type PropertyFilters } from "@/lib/properties/catalog";
 import { cn } from "@/lib/utils";
+import { syncOwnProperties } from "./actions";
 
 export const metadata = { title: "Propiedades · Setter CRM" };
 
@@ -93,6 +94,28 @@ export default async function PropiedadesPage({ searchParams }: PageProps<"/prop
       <PageHeader
         title="Propiedades"
         subtitle={`${total} ${total === 1 ? "propiedad" : "propiedades"} en la cartera`}
+        actions={
+          <>
+            {sync && (
+              <form action={syncOwnProperties}>
+                <button
+                  type="submit"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field"
+                >
+                  <RefreshCw className="size-4" strokeWidth={1.7} />
+                  Sincronizar
+                </button>
+              </form>
+            )}
+            <Link
+              href="/propiedades/nueva"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[13.5px] font-medium text-white hover:bg-primary-hover"
+            >
+              <Plus className="size-4" strokeWidth={2} />
+              Nueva propiedad
+            </Link>
+          </>
+        }
       />
 
       {/* Estado de la sincronización: la hoja es la fuente, el CRM la refleja. */}

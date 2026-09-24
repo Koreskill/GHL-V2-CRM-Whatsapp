@@ -11,7 +11,9 @@ import { safeError } from "@/lib/safe-error";
 import { resolveAgentConfig } from "../config";
 import { buildTriageContext, stateForDecision } from "./context";
 import { generateReply } from "./generate";
-import { INTENTS, TRIAGE_QUESTIONS, URGENCY_LEVELS, type Intent, type Urgency } from "./questions";
+import { INTENTS, TAG_QUESTIONS, TRIAGE_QUESTIONS, URGENCY_LEVELS, type Intent, type Urgency } from "./questions";
+import { extractProfileFields } from "./extract";
+import { applyTags, markPropertyInterest, readTagDecisions } from "./tags";
 import { DEFAULT_POLICY, routeFor, type RoutingPolicy } from "./routes";
 
 /**
@@ -205,7 +207,7 @@ export async function triageIncomingMessage(
       fn: "calificacion",
       model: decisionModel,
       state: stateForDecision(ctx),
-      questions: TRIAGE_QUESTIONS,
+      questions: { ...TRIAGE_QUESTIONS, ...TAG_QUESTIONS },
       sessionId: conversationId,
       requestRef: { conversationId, messageId: trigger.id },
     });
@@ -277,8 +279,48 @@ export async function triageIncomingMessage(
       return { status: "descartado", triageId, route: routing.route, intent };
     }
 
-    // ── 3. GPT redacta ──
+    // ── 2b. Etiquetado del contacto ──
+    // Jev ya devolvió lo tipado (operación, tipo, urgencia, forma de pago, temperatura).
+    // Los valores libres (zonas, presupuesto, ambientes) los extrae el modelo de chat: una
+    // pregunta de opciones no puede devolver "Pichincha y Centro" ni "hasta 60.000".
     const replyModelConfig = await resolveModel(conv.organizationId, "conversacional", config.model);
+    const tagDecisions = readTagDecisions(answers);
+
+    if (conv.contactId) {
+      // La extracción se saltea cuando no hay nada comercial que extraer: no se paga un token
+      // por un reclamo o un pedido de hablar con alguien.
+      const vaCorresponder = !routing.handoff && routing.route !== "aclaracion";
+      const extractModel = await resolveModel(conv.organizationId, "extraccion", replyModelConfig.model);
+      const extracted = vaCorresponder
+        ? await extractProfileFields({
+            ctx,
+            model: extractModel.model,
+            provider: extractModel.provider,
+            params: extractModel.params,
+          })
+        : ({ success: false, error: "no corresponde" } as const);
+
+      await applyTags({
+        organizationId: conv.organizationId,
+        contactId: conv.contactId,
+        conversationId,
+        decisions: tagDecisions,
+        extracted: extracted.success ? extracted.fields : {},
+      }).catch(() => {
+        // Etiquetar es información de apoyo: si falla, el contacto igual tiene que recibir respuesta.
+      });
+
+      // Interés concreto en algo que ya se le mostró: alimenta "Interesados" en la ficha.
+      if (tagDecisions.interestedInShownProperty >= 0.6 && tagDecisions.temperature) {
+        await markPropertyInterest({
+          organizationId: conv.organizationId,
+          contactId: conv.contactId,
+          temperature: tagDecisions.temperature,
+        }).catch(() => {});
+      }
+    }
+
+    // ── 3. GPT redacta ──
     const generated = await generateReply({
       ctx,
       route: routing.route,
@@ -326,12 +368,25 @@ export async function triageIncomingMessage(
     // Se deriva si: la ruta lo pide, el modelo mismo pidió derivar, o no hay texto que mandar.
     const mustHandoff = routing.handoff || Boolean(reply.handoff_reason) || !reply.reply_text;
     if (mustHandoff) {
+      // Se manda un ACUSE antes de pausar: dejar a alguien en visto mientras espera a una
+      // persona es peor que no tener bot. Es un acuse, no una resolución: el prompt de las
+      // rutas de derivación prohíbe prometer una solución o explicar causas.
+      // En modo borrador no sale nada: la inmobiliaria quiere revisar hasta el acuse.
+      let ackId: string | null = null;
+      if (policy.autoReply === "auto" && reply.reply_text) {
+        const ack = await deliverMessage(conversationId, { text: reply.reply_text, source: "agent" });
+        if (ack.ok) ackId = ack.message.id;
+      }
+
       await finish(triageId, {
         ...draft,
         status: "derivado",
         handoffReason: reply.handoff_reason ?? routing.reason,
+        sentMessageId: ackId,
         error: null,
       });
+      // Pausa DESPUÉS del acuse: si se pausara antes, deliverMessage seguiría andando, pero
+      // el orden deja claro que lo último que hace el bot es avisar y retirarse.
       await pauseAi(conversationId, conv.organizationId);
       return { status: "derivado", triageId, route: routing.route, intent };
     }

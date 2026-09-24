@@ -1,4 +1,4 @@
-import { and, eq, notInArray, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { properties, propertySyncConfigs } from "@/db/schema";
 import { reportIncident, resolveIncidents } from "@/lib/incidents/report";
@@ -251,6 +251,25 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
   const seenIds = new Set<string>();
   let upserted = 0;
   let skipped = 0;
+  let protegidas = 0;
+
+  // Propiedades que alguien editó a mano: la sincronización NO las pisa, hasta que se pida
+  // explícitamente volver a tomarlas de la fuente (que limpia manually_edited_at).
+  const editadasAMano = new Set(
+    (
+      await db
+        .select({ externalId: properties.externalId })
+        .from(properties)
+        .where(
+          and(
+            eq(properties.organizationId, orgId),
+            eq(properties.source, "google_sheets"),
+            isNotNull(properties.manuallyEditedAt),
+            isNotNull(properties.externalId),
+          ),
+        )
+    ).map((r) => r.externalId as string),
+  );
 
   for (const [n, row] of rows.entries()) {
     const line = n + 2; // +1 por el encabezado, +1 porque las filas de la hoja arrancan en 1
@@ -267,6 +286,13 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
       continue;
     }
     seenIds.add(externalId);
+
+    // Editada a mano: se respeta lo que puso la persona. Se cuenta aparte, no como omitida
+    // por error, porque no es un problema de la hoja.
+    if (editadasAMano.has(externalId)) {
+      protegidas++;
+      continue;
+    }
 
     // Qué le falta a ESTA propiedad. Se guarda con ella para que la ficha lo señale.
     const rowIssues: string[] = [];
@@ -323,6 +349,7 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
       internalNotes: cell(row, "internalNotes") ?? null,
       externalUpdatedAt: date(cell(row, "externalUpdatedAt")),
       syncedAt: new Date(),
+      syncStatus: rowIssues.length ? "error" : "ok",
       syncIssues: rowIssues,
       // Los ambientes no tienen columna propia en el modelo: van en features.
       features: cell(row, "rooms") ? { ambientes: int(cell(row, "rooms")) } : {},
@@ -362,6 +389,7 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
           internalNotes: values.internalNotes,
           externalUpdatedAt: values.externalUpdatedAt,
           syncedAt: values.syncedAt,
+          syncStatus: values.syncStatus,
           syncIssues: values.syncIssues,
           features: values.features,
           updatedAt: sql`now()`,
@@ -382,10 +410,17 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
         eq(properties.source, "google_sheets"),
         ids.length ? notInArray(properties.externalId, ids) : sql`true`,
         notInArray(properties.status, ["pausada"]),
+        // Una propiedad editada a mano tampoco se pausa sola.
+        isNull(properties.manuallyEditedAt),
       ),
     )
     .returning({ id: properties.id });
   if (paused.length) issues.push(`${paused.length} propiedad(es) ya no están en la hoja: quedaron pausadas`);
+  if (protegidas) {
+    issues.push(
+      `${protegidas} propiedad(es) editadas a mano no se tocaron. Para volver a tomarlas de la hoja, abrí su ficha y usá «Volver a sincronizar».`,
+    );
+  }
 
   const result: SyncResult = {
     ok: true,

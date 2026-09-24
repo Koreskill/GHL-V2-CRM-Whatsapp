@@ -1,6 +1,14 @@
 import { and, asc, desc, eq, gte, ilike, lte, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/db";
-import { contacts, dealProperties, deals, properties, propertySyncConfigs, visits } from "@/db/schema";
+import {
+  contacts,
+  dealProperties,
+  deals,
+  properties,
+  propertySyncConfigs,
+  prospectRequirements,
+  visits,
+} from "@/db/schema";
 
 export type PropertyFilters = {
   q?: string;
@@ -132,7 +140,16 @@ export async function getProperty(id: string, orgId: string) {
   };
 }
 
-// Quiénes consultaron por esta propiedad: sale de las oportunidades que la tienen vinculada.
+/**
+ * Interesados en esta propiedad.
+ *
+ * Sale de deal_properties, que es lo que vincula contacto -> oportunidad -> propiedad.
+ * NO de property_presentations: esa tabla es de la red de colaboración entre inmobiliarias
+ * (apunta a network_property_listings, no a properties), así que una propiedad propia no entraría.
+ *
+ * `interest` es la temperatura del interés en ESTA propiedad; `temperature` es la del contacto
+ * en general. Pueden diferir: alguien caliente puede haber descartado esta propiedad puntual.
+ */
 export async function listPropertyInterest(propertyId: string, orgId: string) {
   const rows = await getDb()
     .select({
@@ -143,19 +160,43 @@ export async function listPropertyInterest(propertyId: string, orgId: string) {
       contactId: contacts.id,
       contactName: contacts.name,
       contactPhone: contacts.phone,
+      temperature: contacts.temperature,
+      interest: dealProperties.interest,
+      lastInterestAt: dealProperties.lastInterestAt,
+      shownAt: dealProperties.addedAt,
+      priceMin: prospectRequirements.priceMin,
+      priceMax: prospectRequirements.priceMax,
+      currency: prospectRequirements.currency,
+      urgency: prospectRequirements.urgency,
       updatedAt: deals.updatedAt,
       // La conversación de la que salió la oportunidad, si nació de una.
       conversationId: deals.conversationId,
+      // Último mensaje del contacto en cualquiera de sus conversaciones.
+      lastContactAt: sql<Date | null>`(
+        select max(c.last_message_at) from conversations c
+        where c.contact_id = ${contacts.id} and c.organization_id = ${orgId}
+      )`,
     })
     .from(dealProperties)
     .innerJoin(deals, eq(deals.id, dealProperties.dealId))
     .innerJoin(contacts, eq(contacts.id, deals.contactId))
+    .leftJoin(prospectRequirements, eq(prospectRequirements.id, deals.prospectRequirementId))
     .where(and(eq(dealProperties.propertyId, propertyId), eq(dealProperties.organizationId, orgId)))
-    .orderBy(desc(deals.updatedAt));
+    // Los calientes arriba: es la lista que mira un asesor para decidir a quién llamar.
+    .orderBy(
+      sql`case ${dealProperties.interest} when 'caliente' then 0 when 'tibio' then 1 when 'frio' then 2 else 3 end`,
+      desc(dealProperties.lastInterestAt),
+      desc(deals.updatedAt),
+    );
 
   return rows.map((r) => ({
     ...r,
     dealTitle: r.dealTitle?.trim() || r.contactName?.trim() || "Sin nombre",
+    priceMin: r.priceMin === null ? null : Number(r.priceMin),
+    priceMax: r.priceMax === null ? null : Number(r.priceMax),
+    shownAt: r.shownAt.toISOString(),
+    lastInterestAt: r.lastInterestAt?.toISOString() ?? null,
+    lastContactAt: r.lastContactAt ? new Date(r.lastContactAt).toISOString() : null,
     updatedAt: r.updatedAt.toISOString(),
   }));
 }
@@ -176,7 +217,7 @@ export async function getCatalogSummary(orgId: string) {
     total: number;
     disponibles: number;
     con_avisos: number;
-    ultima_sync: Date | null;
+    ultima_sync: string | Date | null;
     sync_status: string | null;
   }>(sql`
     select

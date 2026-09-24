@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { contacts, conversations, messageTriage, type TriageStatus } from "@/db/schema";
 
@@ -166,4 +166,94 @@ export async function getIntentBreakdown(orgId: string, days = 30) {
     order by n desc
   `);
   return rows.map((r) => ({ intent: r.intent ?? "sin clasificar", total: r.n, enviados: r.enviados }));
+}
+
+/**
+ * Lo que la campanita muestra al asesor: conversaciones que el agente dejó para una persona,
+ * con el contexto mínimo para decidir a cuál entrar primero.
+ */
+export async function listHandovers(orgId: string, limit = 15) {
+  const rows = await getDb().execute<{
+    id: string;
+    conversation_id: string;
+    contact_name: string | null;
+    channel: string;
+    intent: string | null;
+    urgency: string | null;
+    route_reason: string | null;
+    handoff_reason: string | null;
+    internal_summary: string | null;
+    temperature: string | null;
+    operation: string | null;
+    zones: string[] | null;
+    price_max: string | null;
+    currency: string | null;
+    ultima_propiedad: string | null;
+    status: string;
+    seen_at: string | Date | null;
+    created_at: string | Date;
+  }>(sql`
+    select t.id, t.conversation_id, c.name as contact_name, v.channel::text as channel,
+           t.intent, t.urgency, t.route_reason, t.handoff_reason, t.internal_summary,
+           c.temperature::text as temperature,
+           r.operation::text as operation, r.zones, r.price_max, r.currency,
+           (select p.title from deal_properties dp
+              join properties p on p.id = dp.property_id
+              join deals d on d.id = dp.deal_id
+             where d.contact_id = c.id and d.organization_id = ${orgId}
+             order by dp.last_interest_at desc nulls last, dp.added_at desc
+             limit 1) as ultima_propiedad,
+           t.status::text as status, t.seen_at, t.created_at
+      from message_triage t
+      join conversations v on v.id = t.conversation_id
+      left join contacts c on c.id = v.contact_id
+      left join prospect_requirements r
+        on r.contact_id = c.id and r.organization_id = ${orgId} and r.status = 'activo'
+     where t.organization_id = ${orgId} and t.status in ('borrador', 'derivado')
+     order by case t.urgency when 'alto' then 0 when 'medio' then 1 else 2 end,
+              t.created_at desc
+     limit ${limit}
+  `);
+
+  return rows.map((r) => {
+    // Resumen corto de qué busca, para no abrir la conversación solo para saberlo.
+    const partes = [
+      r.operation,
+      r.zones?.length ? r.zones.slice(0, 2).join(", ") : null,
+      r.price_max ? `hasta ${r.currency ?? "USD"} ${Number(r.price_max).toLocaleString("es-AR")}` : null,
+    ].filter(Boolean);
+
+    return {
+      id: r.id,
+      conversationId: r.conversation_id,
+      contactName: r.contact_name,
+      channel: r.channel,
+      intent: r.intent,
+      urgency: r.urgency,
+      routeReason: r.route_reason,
+      handoffReason: r.handoff_reason,
+      internalSummary: r.internal_summary,
+      temperature: r.temperature,
+      buscaResumen: partes.length ? partes.join(" · ") : null,
+      ultimaPropiedad: r.ultima_propiedad,
+      status: r.status,
+      seen: r.seen_at !== null,
+      createdAt: new Date(r.created_at).toISOString(),
+    };
+  });
+}
+
+/** Marca como visto lo pendiente de una conversación: la campanita cuenta solo lo no visto. */
+export async function markTriageSeen(conversationId: string, orgId: string) {
+  await getDb()
+    .update(messageTriage)
+    .set({ seenAt: sql`now()` })
+    .where(
+      and(
+        eq(messageTriage.conversationId, conversationId),
+        eq(messageTriage.organizationId, orgId),
+        isNull(messageTriage.seenAt),
+      ),
+    )
+    .catch(() => {});
 }

@@ -5,19 +5,21 @@ import {
   ArrowLeft,
   CalendarClock,
   ExternalLink,
-  GitBranch,
   MapPin,
-  MessageCircle,
+  PencilLine,
   Play,
+  RefreshCw,
   Rotate3d,
+  Users,
 } from "lucide-react";
+import { InterestedList } from "@/components/properties/interested-list";
 import { VISIT_LABEL, VISIT_TONE } from "@/components/visits/visit-card";
 import { Card, PageHeader } from "@/components/ui/primitives";
 import { isUuid } from "@/lib/api";
 import { requireOrgId } from "@/lib/auth";
 import { formatListDate } from "@/lib/format";
 import { getProperty, listPropertyInterest } from "@/lib/properties/catalog";
-import { STAGE_LABEL } from "@/lib/pipeline";
+import { resyncProperty } from "../actions";
 import { listVisitsByProperty } from "@/lib/visits/queries";
 import { cn } from "@/lib/utils";
 
@@ -39,13 +41,17 @@ function Dato({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default async function PropiedadPage({ params }: PageProps<"/propiedades/[propertyId]">) {
+export default async function PropiedadPage({ params, searchParams }: PageProps<"/propiedades/[propertyId]">) {
   const orgId = await requireOrgId();
   const { propertyId } = await params;
   if (!isUuid(propertyId)) notFound();
 
   const property = await getProperty(propertyId, orgId);
   if (!property) notFound();
+
+  const sp = await searchParams;
+  const guardado = sp.guardado === "1";
+  const resync = sp.resync === "1";
 
   const [interest, visits] = await Promise.all([
     listPropertyInterest(propertyId, orgId),
@@ -63,15 +69,56 @@ export default async function PropiedadPage({ params }: PageProps<"/propiedades/
         title={property.title ?? "Sin título"}
         subtitle={`${property.operation} · ${property.propertyType}${property.zone ? ` · ${property.zone}` : ""}${property.city ? `, ${property.city}` : ""}`}
         actions={
-          <Link
-            href="/propiedades"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field"
-          >
-            <ArrowLeft className="size-4" strokeWidth={1.7} />
-            Cartera
-          </Link>
+          <>
+            <Link
+              href="/propiedades"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field"
+            >
+              <ArrowLeft className="size-4" strokeWidth={1.7} />
+              Cartera
+            </Link>
+            <Link
+              href={`/propiedades/${propertyId}/editar`}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[13.5px] font-medium text-white hover:bg-primary-hover"
+            >
+              <PencilLine className="size-4" strokeWidth={1.8} />
+              Editar
+            </Link>
+          </>
         }
       />
+
+      {guardado && (
+        <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">
+          Cambios guardados.
+        </p>
+      )}
+      {resync && (
+        <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">
+          Listo: la próxima sincronización vuelve a tomar esta propiedad de la hoja.
+        </p>
+      )}
+
+      {/* Precedencia: mientras esté editada a mano, la hoja no la pisa. */}
+      {property.manuallyEditedAt !== null && property.source === "google_sheets" && (
+        <Card className="mb-5 flex flex-wrap items-center gap-3 border-primary/25 bg-primary/5 p-4">
+          <PencilLine className="size-4 shrink-0 text-primary" strokeWidth={1.8} />
+          <p className="min-w-0 flex-1 text-[13px] text-ink">
+            Editada a mano el {formatListDate(property.manuallyEditedAt.toISOString())}. La sincronización con la
+            hoja no la está pisando.
+          </p>
+          <form action={resyncProperty}>
+            <input type="hidden" name="propertyId" value={propertyId} />
+            <button
+              type="submit"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/30 bg-card px-2.5 text-[12.5px] font-medium text-primary hover:bg-primary/5"
+            >
+              <RefreshCw className="size-3.5" strokeWidth={1.8} />
+              Volver a sincronizar desde la hoja
+            </button>
+          </form>
+        </Card>
+      )}
 
       {/* Lo que falta se señala, no se completa por las nuestras. */}
       {property.syncIssues.length > 0 && (
@@ -172,42 +219,15 @@ export default async function PropiedadPage({ params }: PageProps<"/propiedades/
 
           <Card>
             <div className="flex items-center gap-2 border-b border-line px-5 py-4">
-              <MessageCircle className="size-4 text-muted" strokeWidth={1.7} />
-              <h2 className="text-[15px] font-semibold text-ink">Quién consultó</h2>
+              <Users className="size-4 text-muted" strokeWidth={1.7} />
+              <h2 className="text-[15px] font-semibold text-ink">Interesados en esta propiedad</h2>
+              {interest.length > 0 && (
+                <span className="rounded-md bg-field px-1.5 py-0.5 text-[11px] font-medium text-muted">
+                  {interest.length}
+                </span>
+              )}
             </div>
-            {interest.length === 0 ? (
-              <p className="px-5 py-5 text-[13px] text-muted">Todavía nadie preguntó por esta propiedad.</p>
-            ) : (
-              <ul className="divide-y divide-line">
-                {interest.map((i) => (
-                  <li key={i.dealId} className="flex items-center gap-3 px-5 py-3">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13.5px] font-medium text-ink">{i.contactName}</span>
-                      <span className="block truncate text-[12px] text-muted">
-                        {i.contactPhone ?? "Sin teléfono"} · {STAGE_LABEL[i.stage]}
-                        {i.status !== "abierta" && ` · ${i.status}`}
-                      </span>
-                    </span>
-                    {i.conversationId && (
-                      <Link
-                        href={`/conversaciones/${i.conversationId}`}
-                        title="Abrir la conversación"
-                        className="grid size-8 place-items-center rounded-md text-muted hover:bg-field hover:text-ink"
-                      >
-                        <MessageCircle className="size-4" strokeWidth={1.7} />
-                      </Link>
-                    )}
-                    <Link
-                      href={`/pipeline/${i.dealId}`}
-                      title="Abrir la oportunidad"
-                      className="grid size-8 place-items-center rounded-md text-muted hover:bg-field hover:text-ink"
-                    >
-                      <GitBranch className="size-4" strokeWidth={1.7} />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <InterestedList items={interest} />
           </Card>
 
           <Card>

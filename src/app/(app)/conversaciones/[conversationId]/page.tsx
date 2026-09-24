@@ -5,7 +5,7 @@ import { parseInboxFilters } from "@/components/inbox/filters";
 import { isUuid } from "@/lib/api";
 import { requireOrgId } from "@/lib/auth";
 import { countConversations, getConversation, listConversations, listMessages } from "@/lib/inbox/queries";
-import { getLatestTriage } from "@/lib/agent/triage/queries";
+import { getLatestTriage, markTriageSeen } from "@/lib/agent/triage/queries";
 
 export default async function ConversationPage({ params, searchParams }: PageProps<"/conversaciones/[conversationId]">) {
   const { conversationId } = await params;
@@ -21,6 +21,9 @@ export default async function ConversationPage({ params, searchParams }: PagePro
     getLatestTriage(conversationId, orgId),
   ]);
   if (!conversation) notFound();
+
+  // Abrir la conversación cuenta como verla: la campanita solo muestra lo que nadie miró.
+  await markTriageSeen(conversationId, orgId);
 
   return (
     <div className="-mx-9 -my-8 flex h-[calc(100%+4rem)]">

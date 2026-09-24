@@ -85,6 +85,13 @@
       "when": 1790283096594,
       "tag": "0011_message_triage",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790291448108,
+      "tag": "0012_contact_tags_and_interest",
+      "breakpoints": true
     }
   ]
 }

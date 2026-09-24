@@ -1,6 +1,7 @@
-import { Bell, Search } from "lucide-react";
+import { Search } from "lucide-react";
+import { HandoverBell, type HandoverItem } from "./handover-bell";
 
-export function Topbar() {
+export function Topbar({ handovers }: { handovers: HandoverItem[] }) {
   return (
     <header className="flex h-16 shrink-0 items-center gap-4 border-b border-line bg-card px-8">
       <label className="flex h-10 w-full max-w-xl items-center gap-2.5 rounded-xl bg-field px-3.5 text-muted">
@@ -14,12 +15,7 @@ export function Topbar() {
           ⌘ K
         </kbd>
       </label>
-      <button
-        aria-label="Notificaciones"
-        className="ml-auto grid size-9 place-items-center rounded-lg text-muted hover:bg-field hover:text-ink"
-      >
-        <Bell className="size-[18px]" strokeWidth={1.7} />
-      </button>
+      <HandoverBell items={handovers} />
     </header>
   );
 }

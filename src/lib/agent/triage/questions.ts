@@ -117,3 +117,88 @@ export const TRIAGE_QUESTIONS: Record<string, DecisionQuestion> = {
     ],
   },
 };
+
+// ─── Fase 13: etiquetado del contacto ───────────────────────────────────────
+// Estas preguntas SOLO tienen sentido tipadas: operación, tipo, urgencia, forma de pago y
+// temperatura son conjuntos cerrados. Las zonas, el presupuesto y los ambientes son valores
+// libres, y esos los extrae GPT (ver triage/extract.ts): ninguna pregunta de opciones los
+// puede devolver.
+//
+// Se preguntan sobre la CONVERSACIÓN ENTERA, no solo el último mensaje: si en el tercer mensaje
+// dijo "alquiler" y ahora pregunta por expensas, la operación sigue siendo alquiler.
+
+export const TEMPERATURES = ["frio", "tibio", "caliente"] as const;
+export const URGENCIES = ["explorando", "meses", "ya"] as const;
+
+export const TAG_QUESTIONS: Record<string, DecisionQuestion> = {
+  operacion: {
+    type: "choice",
+    instructions:
+      "Según todo lo que dijo el contacto en la conversación, ¿qué operación busca? Si nunca lo dijo ni se deduce, elegí desconocida.",
+    criteria: {
+      venta: "Quiere comprar, o es dueño y quiere vender.",
+      alquiler: "Quiere alquilar, o es dueño y quiere poner en alquiler, por plazo largo.",
+      temporario: "Alquiler por días, semanas o temporada.",
+      desconocida: "No lo dijo y no se puede deducir con seguridad de lo que escribió.",
+    },
+  },
+
+  tipo_propiedad: {
+    type: "choice",
+    instructions: "¿Qué tipo de inmueble busca u ofrece? Si no lo dijo, elegí desconocido.",
+    criteria: {
+      departamento: "Departamento, depto, monoambiente, 2 ambientes, etc.",
+      casa: "Casa, chalet, vivienda unifamiliar.",
+      ph: "PH, casa tipo PH, propiedad horizontal.",
+      terreno: "Terreno, lote, fracción.",
+      local: "Local comercial, fondo de comercio.",
+      oficina: "Oficina, espacio de trabajo.",
+      cochera: "Cochera, garaje, baulera.",
+      desconocido: "No mencionó el tipo de inmueble.",
+    },
+  },
+
+  urgencia: {
+    type: "score",
+    instructions: "¿En qué plazo necesita resolver? Tomá lo que dijo, no lo supongas por el tono.",
+    // El orden define la escala: 0 explorando, 1 meses, 2 ya.
+    criteria: [
+      "Está mirando, sin fecha ni apuro. Curioseando el mercado.",
+      "Quiere resolver en los próximos meses; tiene una ventana pero no es inmediata.",
+      "Necesita resolver ya: se le vence el contrato, se muda por trabajo, o lo dijo explícitamente.",
+    ],
+  },
+
+  forma_pago: {
+    type: "choice",
+    instructions: "¿Cómo va a pagar? Solo si lo dijo; no lo deduzcas del presupuesto.",
+    criteria: {
+      contado: "Paga al contado, con fondos propios, sin financiación.",
+      credito: "Usa un crédito hipotecario, financiación bancaria o un programa estatal de vivienda.",
+      desconocida: "No habló de cómo va a pagar.",
+    },
+  },
+
+  temperatura: {
+    type: "score",
+    instructions:
+      "¿Qué tan cerca está de concretar una operación? Mirá la conversación entera, no solo el último mensaje.",
+    // 0 frío, 1 tibio, 2 caliente.
+    criteria: [
+      "Frío: solo explora, está fuera de presupuesto, no tiene urgencia, o no dio ningún dato concreto.",
+      "Tibio: interés real y algún dato concreto, pero falta algo clave (presupuesto, zona o plazo).",
+      "Caliente: presupuesto acorde, urgencia inmediata y quiere ver una propiedad o avanzar ya.",
+    ],
+  },
+
+  interes_propiedad: {
+    type: "noul",
+    instructions:
+      "¿Mostró interés concreto en alguna de las propiedades que ya se le mostraron en esta conversación?",
+    criteria: {
+      true: "Pidió fotos, la ficha, el precio, la dirección, una visita, o dijo que le gusta o le interesa una propiedad puntual.",
+      false:
+        "No mencionó ninguna propiedad concreta, o solo describió lo que busca en general sin referirse a una que se le mostró.",
+    },
+  },
+};

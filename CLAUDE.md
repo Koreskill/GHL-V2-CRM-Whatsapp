@@ -156,6 +156,36 @@ Una opción fuera del catálogo o una respuesta ilegible **no se enrutan a ciega
 
 El contexto se arma en `triage/context.ts` y TODO se filtra por `organizationId`. Las **notas internas y los documentos de una propiedad no entran al prompt**: son privados del equipo y no tienen por qué pasar por un modelo que después le escribe al cliente. Cada ficha lleva `datosFaltantes`: es exactamente lo que el modelo NO puede afirmar.
 
+## Etiquetado del contacto y handover (Fase 13)
+
+### Dónde vive cada cosa (y por qué no hay una tabla contact_tags)
+
+- **Qué busca** (operación, tipos, zonas, presupuesto, ambientes, urgencia, forma de pago, tipo de crédito) → `prospect_requirements`, que ya existía y es lo que leen el Pipeline y el contexto del triaje. **No se duplica en otra tabla:** dos lugares con la zona y el presupuesto del mismo contacto terminan diciendo cosas distintas.
+- **Temperatura** (`frio | tibio | caliente`) → `contacts.temperature`. Es de la PERSONA: la misma persona escribiendo por WhatsApp y por Instagram tiene una sola temperatura.
+- **Bot pausado** → `conversations.ai_enabled`, que ya existía. NO por contacto: rompería la regla base de que la unidad es la conversación.
+- **Interés por propiedad** → `deal_properties.interest` + `last_interest_at`. Que exista la fila = se la mostramos; que tenga temperatura = mostró interés.
+
+### Qué modelo hace qué
+
+**Jev no puede devolver un JSON incremental arbitrario**: la Decisions API responde preguntas tipadas. Por eso el etiquetado se parte:
+
+- **Jev** (`TAG_QUESTIONS`, en la misma llamada que la clasificación de ruta, para no pagar el contexto dos veces): operación, tipo de propiedad, urgencia, forma de pago, temperatura, interés en una propiedad mostrada. Todo conjunto cerrado.
+- **GPT** (`triage/extract.ts`, función `extraccion`): zonas, presupuesto min/max, moneda, ambientes, dormitorios, tipo de crédito. Valores libres que ninguna pregunta de opciones puede devolver. Se saltea cuando la ruta es de derivación o aclaración: no se paga un token por un reclamo.
+
+### El etiquetado es INCREMENTAL
+
+Lo que no vino no se toca. Un "sí, dale" no puede borrar la zona y el presupuesto que el contacto dio hace cinco mensajes. Las zonas y los tipos se **acumulan**. `desconocida`/`desconocido` en una respuesta de Jev significa "no lo dijo", y se guarda como `null` para no pisar lo anterior. La temperatura solo se escribe si Jev la pudo determinar: no se degrada a frío por un mensaje corto.
+
+### Handover
+
+Cuando se deriva: se manda un **acuse** ("lo recibimos, lo sigue una persona"), se pausa la IA del hilo y aparece en la campanita de la topbar. El acuse no promete una solución ni explica causas — lo impide el prompt de las rutas de derivación. En modo `borrador` no sale ni el acuse. Reactivar el bot es el mismo interruptor de IA que ya estaba en la bandeja.
+
+La campanita cuenta solo lo **no visto** (`message_triage.seen_at`); abrir la conversación lo marca. Muestra motivo, qué busca y última propiedad vista, para decidir a cuál entrar sin abrirla.
+
+### Precedencia de la edición manual
+
+`properties.manually_edited_at` con fecha = la sincronización **no pisa** esa propiedad ni la pausa por ausencia. Se limpia con «Volver a sincronizar desde la hoja» en su ficha. El resumen de la sincronización dice cuántas se saltearon por esto, para que no parezca que fallaron. Una propiedad cargada a mano tiene `external_id` null y la hoja no la toca nunca.
+
 ## Plano de agencia (visión del dueño del CRM)
 
 - `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).
@@ -211,6 +241,7 @@ Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` lim
 10. Errores y logs + contexto de agencia
 11. Plantillas con encabezado, pie y botones, e indicador "escribiendo…"
 12. Triaje de mensajes: Jev clasifica, el código enruta y GPT redacta
+13. Etiquetado del contacto, interesados por propiedad, handover y carga manual de propiedades
 
 ## Sistema visual — Setter CRM
 
