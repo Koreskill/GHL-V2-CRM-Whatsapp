@@ -296,21 +296,30 @@ export async function buildTriageContext(input: {
  * lo que se manda se paga por token de entrada.
  */
 export function stateForDecision(ctx: TriageContext) {
+  const q = ctx.queBusca;
+  // Resumen del perfil en una línea, en vez del objeto entero: para CLASIFICAR una intención
+  // alcanza con saber qué venía buscando, no el detalle de cada campo.
+  const perfil = q
+    ? [
+        q.operacion,
+        q.tipos.join("/") || null,
+        q.zonas.join("/") || null,
+        q.presupuestoMax ? `hasta ${q.moneda} ${q.presupuestoMax}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null
+    : null;
+
   return {
     canal: ctx.channel,
     mensaje_entrante: ctx.mensajeEntrante,
-    contexto_reciente: ctx.historial.slice(-6),
-    oportunidad: ctx.oportunidad
-      ? { etapa: ctx.oportunidad.etapa, estado: ctx.oportunidad.estado }
-      : null,
-    que_busca: ctx.queBusca,
-    propiedades_consultadas: ctx.propiedadesDeInteres.map((p) => ({
-      titulo: p.title,
-      operacion: p.operation,
-      estado: p.status,
-      zona: p.zone,
-    })),
-    visitas: ctx.visitas,
+    // 3 mensajes alcanzan para desambiguar el último ("sí", "dale", "y en venta?"). Con 6 se
+    // pagaba el doble de contexto en cada mensaje sin que la clasificación mejorara.
+    contexto_reciente: ctx.historial.slice(-3),
+    venia_buscando: perfil,
+    // Solo los títulos: Jev no necesita el estado ni la zona de cada una para saber si el
+    // cliente se está refiriendo a alguna.
+    ya_le_mostramos: ctx.propiedadesDeInteres.slice(0, 5).map((p) => p.title),
   };
 }
 

@@ -3,13 +3,21 @@ import { aiDecide, readChoice, readNoul, readScore } from "@/lib/ai/decisions";
 import { resolveModel } from "@/lib/ai/openrouter";
 import { reportIncident } from "@/lib/incidents/report";
 import type { ResolvedAgentConfig } from "../config";
-import { extractAmounts, loadOfferableCatalog, normalize, type CatalogProperty } from "./catalog-search";
+import { detectOperation, extractAmounts, loadOfferableCatalog, normalize, type CatalogProperty } from "./catalog-search";
 import { buildTriageContext, stateForDecision, type TriageContext } from "./context";
 import { extractProfileFields, type ExtractedFields } from "./extract";
 import { generateReply, type GeneratedReply } from "./generate";
 import { checkReply, correctionPrompt, type Violation } from "./guard";
 import { renderCards } from "./listing-cards";
-import { INTENTS, TAG_QUESTIONS, TRIAGE_QUESTIONS, URGENCY_LEVELS, type Intent, type Urgency } from "./questions";
+import {
+  INTENTS,
+  TAG_QUESTIONS,
+  TRIAGE_QUESTIONS,
+  URGENCIES,
+  urgencyFor,
+  type Intent,
+  type Urgency,
+} from "./questions";
 import { buildCriteria, retrieve, type ProfileSnapshot, type Retrieval } from "./retrieval";
 import { routeFor, type Route, type RoutingPolicy, type RoutingResult } from "./routes";
 import { applyTags, markPropertyInterest, readTagDecisions } from "./tags";
@@ -241,7 +249,12 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
     makesOffer: readNoul(answers.hace_oferta) ?? 0,
     // Sin dato, se asume que SÍ necesita una persona: ante la duda, no se contesta solo.
     requiresHuman: readNoul(answers.requires_human) ?? 1,
-    urgency: URGENCY_LEVELS[readScore(answers.urgency, URGENCY_LEVELS.length)?.level ?? 0] as Urgency,
+    // Derivada en código a partir de la intención y del plazo: ya no es una pregunta a Jev.
+    urgency: urgencyFor(
+      intentAnswer.choice as Intent,
+      readScore(answers.urgencia, URGENCIES.length) ? URGENCIES[readScore(answers.urgencia, URGENCIES.length)!.level] : null,
+      (readNoul(answers.contains_visit_request) ?? 0) >= 0.6,
+    ),
     decisionModel: decided.data.model,
     decisionId: decided.data.id ?? null,
   };
@@ -280,7 +293,17 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
   }
 
   if (contactId) {
-    await applyTags({ organizationId, contactId, conversationId, decisions: tagDecisions, extracted }).catch(() => {
+    // La operación que se GUARDA es la del último mensaje, no la que Jev deduce de toda la
+    // conversación: si el cliente venía por alquiler y ahora pregunta por venta, el perfil tiene
+    // que quedar en venta. Si no, el turno siguiente vuelve a arrastrar la operación vieja.
+    const turnOperation = detectOperation(text) ?? intentOperation(classification.intent) ?? tagDecisions.operation;
+    await applyTags({
+      organizationId,
+      contactId,
+      conversationId,
+      decisions: { ...tagDecisions, operation: turnOperation as typeof tagDecisions.operation },
+      extracted,
+    }).catch(() => {
       // El perfil es información de apoyo: si falla, el contacto igual recibe respuesta.
     });
     if (tagDecisions.interestedInShownProperty >= 0.6 && tagDecisions.temperature) {
@@ -294,6 +317,7 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
     catalog,
     thisTurn: {
       operation: tagDecisions.operation,
+      intentOperation: intentOperation(classification.intent),
       propertyType: tagDecisions.propertyType,
       zones: extracted.zonas,
       priceMin: extracted.presupuesto_min,
@@ -544,6 +568,18 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
     source,
     error: null,
   };
+}
+
+/**
+ * La operación que implica la intención del ÚLTIMO mensaje.
+ * `buy`/`rent` son exactamente venta/alquiler, y el intent se calcula sobre el último mensaje,
+ * así que es la señal más fresca para saber qué buscar. El resto de las intenciones no dicen nada
+ * de la operación (una consulta por una propiedad puede ser de venta o de alquiler).
+ */
+function intentOperation(intent: Intent): string | null {
+  if (intent === "buy" || intent === "owner_sell") return "venta";
+  if (intent === "rent" || intent === "owner_rent") return "alquiler";
+  return null;
 }
 
 /** Rutas donde la persona habla de SU propiedad: no se le muestran las del catálogo. */

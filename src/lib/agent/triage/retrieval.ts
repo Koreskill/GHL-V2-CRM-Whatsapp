@@ -79,7 +79,13 @@ export function buildCriteria(input: {
   profile: ProfileSnapshot | null;
   catalog: CatalogProperty[];
   thisTurn: {
+    /** De la pregunta `operacion` de Jev, que mira TODA la conversación. Va último. */
     operation: string | null;
+    /**
+     * Operación del ÚLTIMO mensaje, derivada del intent (buy→venta, rent→alquiler). Manda sobre
+     * todo lo demás: si venía preguntando por alquiler y ahora dice "¿y en venta?", busca venta.
+     */
+    intentOperation?: string | null;
     propertyType: string | null;
     zones?: string[];
     priceMin?: number | null;
@@ -94,7 +100,17 @@ export function buildCriteria(input: {
   const textTypes = detectTypes(text);
   const textZones = detectZones(text, catalog);
 
-  const operation = thisTurn.operation ?? textOp ?? profile?.operation ?? null;
+  // Orden: lo MÁS RECIENTE Y ESPECÍFICO primero.
+  //   1. El texto del último mensaje ("¿y en venta?") — literal, sin interpretación.
+  //   2. El intent de Jev, que se calcula sobre el último mensaje (buy→venta, rent→alquiler).
+  //   3. La pregunta `operacion` de Jev, que mira TODA la conversación.
+  //   4. El perfil acumulado.
+  //
+  // El orden importa y ya rompió en producción: un cliente preguntó por alquiler en Pichincha y
+  // después "¿y en venta?". Jev respondió `operacion: alquiler` (mirando toda la conversación) y
+  // eso pisaba el "venta" del mensaje actual, así que se buscaban alquileres y el bot contestaba
+  // "tampoco tengo en venta" teniendo uno publicado.
+  const operation = textOp ?? thisTurn.intentOperation ?? thisTurn.operation ?? profile?.operation ?? null;
 
   const turnTypes = [...new Set([...(thisTurn.propertyType ? [thisTurn.propertyType] : []), ...textTypes])];
   const propertyTypes = turnTypes.length ? turnTypes : profile?.propertyTypes ?? [];

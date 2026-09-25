@@ -24,7 +24,6 @@ import type { ExtractedFields } from "./extract";
  * WhatsApp y por Instagram tiene una sola temperatura, aunque sean dos conversaciones.
  */
 
-const OPERACIONES = ["venta", "alquiler", "temporario", "desconocida"] as const;
 const TIPOS = [
   "departamento",
   "casa",
@@ -35,7 +34,6 @@ const TIPOS = [
   "cochera",
   "desconocido",
 ] as const;
-const FORMAS_PAGO = ["contado", "credito", "desconocida"] as const;
 
 export type TagDecisions = {
   operation: "venta" | "alquiler" | "temporario" | null;
@@ -52,21 +50,23 @@ export type TagDecisions = {
  * como null para no pisar lo que ya se sabía de mensajes anteriores.
  */
 export function readTagDecisions(answers: Record<string, DecisionAnswer>): TagDecisions {
-  const operacion = readChoice(answers.operacion, OPERACIONES);
+  // `operacion` ya NO se le pregunta a Jev: la dice el intent, que además mira el último mensaje
+  // (la pregunta miraba toda la conversación y se quedaba con la operación vieja). El llamador
+  // pisa este campo con la operación resuelta del turno, así que acá queda siempre null.
+  const operacion = null;
   const tipo = readChoice(answers.tipo_propiedad, TIPOS);
-  const pago = readChoice(answers.forma_pago, FORMAS_PAGO);
+  // `forma_pago` tampoco se pregunta: es poco frecuente que lo digan y, cuando lo dicen, lo
+  // captura la extracción junto con el tipo de crédito.
+  const pago = null;
   const urgencia = readScore(answers.urgencia, URGENCIES.length);
   const temperatura = readScore(answers.temperatura, TEMPERATURES.length);
 
   return {
-    operation:
-      operacion && operacion.choice !== "desconocida"
-        ? (operacion.choice as "venta" | "alquiler" | "temporario")
-        : null,
+    operation: operacion,
+    // "desconocido" no es un valor: es que no lo dijo. Va null para no pisar lo que ya se sabía.
     propertyType: tipo && tipo.choice !== "desconocido" ? tipo.choice : null,
     urgency: urgencia ? URGENCIES[urgencia.level] : null,
-    paymentMethod:
-      pago && pago.choice !== "desconocida" ? (pago.choice as PaymentMethod) : null,
+    paymentMethod: pago,
     temperature: temperatura ? TEMPERATURES[temperatura.level] : null,
     interestedInShownProperty: readNoul(answers.interes_propiedad) ?? 0,
   };

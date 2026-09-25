@@ -21,6 +21,10 @@ const rollback = new Error("tags_rollback");
 
 // ─── Lectura de las decisiones tipadas ──────────────────────────────────────
 {
+  // `operacion` y `forma_pago` ya NO se le preguntan a Jev (ver questions.ts): la operación la
+  // resuelve compose.ts a partir del intent/texto del turno, y la forma de pago la capta la
+  // extracción. `readTagDecisions` tiene que devolverlas siempre en null, aunque el payload de
+  // Jev (una respuesta vieja en un reintento, por ejemplo) todavía las traiga.
   const answers: Record<string, DecisionAnswer> = {
     operacion: { type: "choice", choice: "alquiler", confidence: 0.9 },
     tipo_propiedad: { type: "choice", choice: "departamento", confidence: 0.8 },
@@ -30,20 +34,18 @@ const rollback = new Error("tags_rollback");
     interes_propiedad: { type: "noul", noul: 0.91 },
   };
   const d = readTagDecisions(answers);
-  assert.equal(d.operation, "alquiler");
+  assert.equal(d.operation, null, "operacion ya no la decide Jev: siempre null acá");
   assert.equal(d.propertyType, "departamento");
   assert.equal(d.urgency, "ya", "1.9 redondea al nivel más urgente");
-  assert.equal(d.paymentMethod, "credito");
+  assert.equal(d.paymentMethod, null, "forma_pago ya no la decide Jev: siempre null acá");
   assert.equal(d.temperature, "tibio", "1.2 redondea a tibio");
   assert.equal(d.interestedInShownProperty, 0.91);
 }
 {
-  // "desconocida" NO es un valor: es que el contacto no lo dijo. Tiene que quedar en null para
+  // "desconocido" NO es un valor: es que el contacto no lo dijo. Tiene que quedar en null para
   // no pisar lo que ya se sabía de mensajes anteriores.
   const d = readTagDecisions({
-    operacion: { type: "choice", choice: "desconocida", confidence: 0.95 },
     tipo_propiedad: { type: "choice", choice: "desconocido", confidence: 0.9 },
-    forma_pago: { type: "choice", choice: "desconocida", confidence: 0.9 },
   });
   assert.equal(d.operation, null);
   assert.equal(d.propertyType, null);
