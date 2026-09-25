@@ -3,6 +3,7 @@ import { GitBranch, MessageCircle, Users } from "lucide-react";
 import { EmptyState } from "@/components/ui/primitives";
 import { formatListDate } from "@/lib/format";
 import { STAGE_LABEL } from "@/lib/pipeline";
+import { TEMPERATURE_META as TEMP } from "@/lib/crm/tag-labels";
 import type { LeadTemperature } from "@/db/schema";
 import { cn } from "@/lib/utils";
 
@@ -11,12 +12,6 @@ import { cn } from "@/lib/utils";
  * Es la lista que mira un asesor para decidir a quién llamar primero, así que lo primero que
  * se lee es el estado y el presupuesto, no el nombre.
  */
-
-const TEMP: Record<LeadTemperature, { label: string; dot: string; text: string }> = {
-  caliente: { label: "Caliente", dot: "bg-accent-red", text: "text-accent-red" },
-  tibio: { label: "Tibio", dot: "bg-accent-amber", text: "text-accent-amber" },
-  frio: { label: "Frío", dot: "bg-muted/50", text: "text-muted" },
-};
 
 type Interested = {
   dealId: string;

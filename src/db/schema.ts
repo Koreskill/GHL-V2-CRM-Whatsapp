@@ -932,3 +932,4 @@ export type TriageStatus = (typeof triageStatusEnum.enumValues)[number];
 export type LeadTemperature = (typeof leadTemperatureEnum.enumValues)[number];
 export type ProspectUrgency = (typeof urgencyEnum.enumValues)[number];
 export type PaymentMethod = (typeof paymentMethodEnum.enumValues)[number];
+export type OperationType = (typeof operationTypeEnum.enumValues)[number];

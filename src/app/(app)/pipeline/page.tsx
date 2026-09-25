@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { Building2, CircleUser, Plus, Trophy, XCircle } from "lucide-react";
 import { StageSelect } from "@/components/pipeline/stage-select";
+import { ContactTagsBar } from "@/components/tags/contact-tags-bar";
 import { Button, Card } from "@/components/ui/primitives";
 import { requireOrgId } from "@/lib/auth";
 import { listBoardDeals, listClosedDeals } from "@/lib/deals/queries";
 import { listTeam, memberLabel } from "@/lib/deals/team";
+import { getContactTagSummaries } from "@/lib/crm/tags";
 import { formatListDate } from "@/lib/format";
 import { DEAL_STAGES } from "@/lib/pipeline";
 import { cn } from "@/lib/utils";
@@ -21,6 +23,7 @@ export default async function PipelinePage() {
     listClosedDeals(orgId),
     listTeam(orgId),
   ]);
+  const tagsByContact = await getContactTagSummaries(open.map((d) => d.contactId), orgId);
 
   const totalValue = open.reduce((sum, d) => sum + (d.value ?? 0), 0);
 
@@ -88,6 +91,10 @@ export default async function PipelinePage() {
                           <CircleUser className="size-3" strokeWidth={1.8} />
                           {memberLabel(team, d.assignedUserId).split("@")[0]}
                         </span>
+                      </div>
+
+                      <div className="mt-1.5">
+                        <ContactTagsBar summary={tagsByContact.get(d.contactId) ?? null} compact />
                       </div>
 
                       {d.lastInteractionAt && (

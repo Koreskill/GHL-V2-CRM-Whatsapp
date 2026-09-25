@@ -3,9 +3,11 @@ import { GitBranch, MessageCircle, Search, Users } from "lucide-react";
 import { ChannelBadge } from "@/components/channel-badge";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { parseInboxFilters } from "@/components/inbox/filters";
+import { ContactTagsBar } from "@/components/tags/contact-tags-bar";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { requireOrgId } from "@/lib/auth";
 import { countContacts, listContacts } from "@/lib/crm/queries";
+import { getContactTagSummaries } from "@/lib/crm/tags";
 import { formatListDate, initials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +25,7 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
   const orgId = await requireOrgId();
   const filters = parseInboxFilters(await searchParams);
   const [contacts, total] = await Promise.all([listContacts(orgId, filters), countContacts(orgId)]);
+  const tagsByContact = await getContactTagSummaries(contacts.map((c) => c.id), orgId);
   const filtered = Boolean(filters.channel || filters.q);
 
   return (
@@ -78,6 +81,7 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
                 <th className="px-6 py-3 font-semibold">Contacto</th>
                 <th className="px-4 py-3 font-semibold">Canales</th>
                 <th className="px-4 py-3 font-semibold">Teléfono</th>
+                <th className="px-4 py-3 font-semibold">Etiquetas</th>
                 <th className="px-4 py-3 font-semibold">Último mensaje</th>
                 <th className="px-6 py-3 text-right font-semibold">Conversaciones</th>
               </tr>
@@ -108,6 +112,9 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
                     </span>
                   </td>
                   <td className="px-4 py-3.5 text-ink">{c.phone ?? <span className="text-muted">—</span>}</td>
+                  <td className="px-4 py-3.5">
+                    <ContactTagsBar summary={tagsByContact.get(c.id) ?? null} compact />
+                  </td>
                   <td className="px-4 py-3.5 text-muted">{c.lastMessageAt ? formatListDate(c.lastMessageAt) : "—"}</td>
                   <td className="px-6 py-3.5">
                     <span className="flex justify-end gap-1.5">

@@ -4,8 +4,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useRouter } from "next/navigation";
 import { AlertCircle, Bot, Check, CheckCheck, Clock, FileText, Pause, Play, RotateCcw, SendHorizontal } from "lucide-react";
 import { CHANNEL_META } from "@/components/channel-icons";
+import { ContactTagsBar, ContactTagsEditPanel } from "@/components/tags/contact-tags-bar";
 import { dayOf, formatDayDivider, formatRemaining, formatTime } from "@/lib/format";
 import type { ChatMessage, ConversationDetail } from "@/lib/inbox/queries";
+import type { ContactTagSummary } from "@/lib/crm/tag-labels";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
 import { TemplatePicker } from "./template-picker";
@@ -24,15 +26,19 @@ export function ChatView({
   conversation,
   messages,
   triage,
+  tags,
 }: {
   conversation: ConversationDetail;
   messages: ChatMessage[];
   triage: TriageRow | null;
+  tags: ContactTagSummary | null;
 }) {
   const router = useRouter();
   const [local, setLocal] = useState<LocalMessage[]>([]);
   const [aiEnabled, setAiEnabled] = useState(conversation.aiEnabled);
   const [typing, setTyping] = useState({ agent: false, human: false });
+  const [contactTags, setContactTags] = useState(tags);
+  const [editingTags, setEditingTags] = useState(false);
   // El texto del campo de escritura vive acá para que el borrador del agente se pueda cargar
   // con un setState, sin un efecto que sincronice. El borrador NO se envía solo.
   const [text, setText] = useState("");
@@ -40,14 +46,23 @@ export function ChatView({
   const [, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // La lista de conversaciones refresca mensajes y triaje; acá solo se consulta quién escribe.
+  // La lista de conversaciones refresca mensajes y triaje; acá se consulta quién escribe y, si el
+  // contacto tiene perfil, sus etiquetas: así se ven actualizarse a medida que el agente las va
+  // completando en la misma conversación, sin que el usuario tenga que recargar la página.
   useEffect(() => {
     let cancelled = false;
+    const contactId = conversation.contactId;
     const tick = async () => {
       if (document.visibilityState !== "visible") return;
-      const res = await fetch("/api/conversations/" + conversation.id + "/typing").catch(() => null);
-      const data = res?.ok ? await res.json().catch(() => null) : null;
-      if (!cancelled) setTyping({ agent: Boolean(data?.agent), human: Boolean(data?.human) });
+      const [typingRes, tagsRes] = await Promise.all([
+        fetch("/api/conversations/" + conversation.id + "/typing").catch(() => null),
+        contactId ? fetch(`/api/contacts/${contactId}/tags`).catch(() => null) : Promise.resolve(null),
+      ]);
+      const typingData = typingRes?.ok ? await typingRes.json().catch(() => null) : null;
+      const tagsData = tagsRes?.ok ? await tagsRes.json().catch(() => null) : null;
+      if (cancelled) return;
+      setTyping({ agent: Boolean(typingData?.agent), human: Boolean(typingData?.human) });
+      if (tagsData) setContactTags(tagsData as ContactTagSummary);
     };
     void tick();
     const id = setInterval(tick, POLL_MS);
@@ -55,7 +70,7 @@ export function ChatView({
       cancelled = true;
       clearInterval(id);
     };
-  }, [router, conversation.id]);
+  }, [router, conversation.id, conversation.contactId]);
 
   useEffect(() => {
     if (conversation.unreadCount === 0) return;
@@ -166,6 +181,9 @@ export function ChatView({
             {subtitle}
           </p>
         </div>
+        {conversation.contactId && (
+          <ContactTagsBar summary={contactTags} onEdit={() => setEditingTags((v) => !v)} />
+        )}
         <button
           onClick={toggleAi}
           title={aiEnabled ? "Pausar el agente en esta conversación" : "Reactivar el agente en esta conversación"}
@@ -179,6 +197,14 @@ export function ChatView({
           {aiEnabled ? <Pause className="size-3.5" strokeWidth={2} /> : <Play className="size-3.5" strokeWidth={2} />}
         </button>
       </header>
+
+      {editingTags && conversation.contactId && contactTags && (
+        <ContactTagsEditPanel
+          summary={contactTags}
+          onSave={(next) => setContactTags(next)}
+          onClose={() => setEditingTags(false)}
+        />
+      )}
 
       {triage && !triageHidden && (
         <TriagePanel

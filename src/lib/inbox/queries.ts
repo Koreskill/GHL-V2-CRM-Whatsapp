@@ -86,6 +86,7 @@ export async function countConversations(orgId: string) {
 }
 
 export type ConversationDetail = ConversationListItem & {
+  contactId: string | null;
   aiEnabled: boolean;
   window: MessagingWindow;
 };
@@ -110,6 +111,7 @@ export async function getConversation(id: string, orgId: string): Promise<Conver
     unreadCount: c.unreadCount,
     preview: null,
     previewDirection: null,
+    contactId: c.contactId,
     aiEnabled: c.aiEnabled,
     window: computeWindow(c.channel, c.lastInboundAt),
   };

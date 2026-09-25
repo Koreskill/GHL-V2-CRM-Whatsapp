@@ -13,6 +13,7 @@ import type { DecisionAnswer } from "../src/lib/ai/decisions";
 import { readTagDecisions, applyTags, markPropertyInterest } from "../src/lib/agent/triage/tags";
 import { __parseExtractionForTests as parseExtraction } from "../src/lib/agent/triage/extract";
 import { listPropertyInterest } from "../src/lib/properties/catalog";
+import { getContactTagSummary, getContactTagSummaries, updateContactTags } from "../src/lib/crm/tags";
 
 // Etiquetado del contacto contra la base REAL con el rol crm_app, en una transacción que se
 // revierte. La parte pura (lectura de decisiones y de la extracción) no toca la base.
@@ -267,6 +268,55 @@ async function main() {
           0,
           "no se puede marcar interés desde otra inmobiliaria",
         );
+
+        // ── Lectura para la interfaz: lo que ya dejó el agente ──
+        const leido = await getContactTagSummary(contact.id, org.id);
+        assert.equal(leido.temperature, "caliente");
+        assert.equal(leido.operation, "alquiler");
+        assert.equal(leido.urgency, "ya");
+        assert.deepEqual(leido.zones, ["Pichincha", "Centro"]);
+        assert.equal(leido.priceMax, 60000);
+        assert.equal(leido.currency, "ARS");
+
+        // La versión en lote tiene que devolver lo mismo, y un contacto sin perfil no revienta:
+        // vuelve con etiquetas vacías, no con undefined.
+        const [sinPerfil] = await tx
+          .insert(schema.contacts)
+          .values({ organizationId: org.id, name: "Sin Consultas" })
+          .returning();
+        const lote = await getContactTagSummaries([contact.id, sinPerfil.id], org.id);
+        assert.equal(lote.get(contact.id)?.operation, "alquiler");
+        assert.equal(lote.get(contact.id)?.temperature, "caliente");
+        assert.deepEqual(lote.get(sinPerfil.id)?.zones, []);
+        assert.equal(lote.get(sinPerfil.id)?.temperature, null);
+
+        // ── Edición MANUAL: a diferencia del agente, un campo presente pisa lo que hubiera ──
+        const editado = await updateContactTags({
+          organizationId: org.id,
+          contactId: contact.id,
+          patch: { temperature: "frio", priceMax: 45000 },
+        });
+        assert.equal(editado.temperature, "frio", "el asesor puede corregir lo que interpretó el bot");
+        assert.equal(editado.priceMax, 45000);
+        assert.equal(editado.operation, "alquiler", "lo que no vino en el patch no se toca");
+        assert.deepEqual(editado.zones, ["Pichincha", "Centro"], "tampoco las zonas");
+
+        // Vaciar explícitamente un campo (a diferencia del agente, acá SÍ se puede).
+        const vaciado = await updateContactTags({
+          organizationId: org.id,
+          contactId: contact.id,
+          patch: { operation: null },
+        });
+        assert.equal(vaciado.operation, null, "un patch explícito puede vaciar un campo");
+        assert.equal(vaciado.temperature, "frio", "lo editado antes sigue ahí");
+
+        // Aislamiento: no se puede editar un contacto de otra inmobiliaria.
+        await assert.rejects(
+          () => updateContactTags({ organizationId: otra.id, contactId: contact.id, patch: { temperature: "caliente" } }),
+          /no encontrado/i,
+        );
+        const [c4] = await tx.select().from(schema.contacts).where(eq(schema.contacts.id, contact.id));
+        assert.equal(c4.temperature, "frio", "el intento desde otra inmobiliaria no cambió nada");
 
         checked = true;
         throw rollback;
