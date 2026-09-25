@@ -121,7 +121,13 @@ export async function applyTags(input: {
     "priceMax",
     extracted.presupuesto_max === undefined ? undefined : extracted.presupuesto_max === null ? null : String(extracted.presupuesto_max),
   );
-  if (extracted.moneda) patch.currency = extracted.moneda;
+  // La columna currency tiene default USD, así que un "USD" guardado NO dice si el cliente lo
+  // dijo. Se marca aparte cuándo fue explícito: si no, un presupuesto de alquiler de 60.000 pesos
+  // se comparaba contra dólares y no encontraba nada.
+  if (extracted.moneda) {
+    patch.currency = extracted.moneda;
+    patch.rawExtraction = { ...(existing?.rawExtraction ?? {}), ...(patch.rawExtraction as object), moneda_explicita: true };
+  }
 
   // Las zonas y los tipos se ACUMULAN: si antes dijo Palermo y ahora agrega Colegiales, busca
   // en las dos. Solo se reemplazan si la extracción devuelve una lista nueva completa.
@@ -135,7 +141,12 @@ export async function applyTags(input: {
   }
   // Los ambientes no tienen columna propia: van en raw_extraction, como el resto de lo suelto.
   if (extracted.ambientes !== undefined) {
-    patch.rawExtraction = { ...(existing?.rawExtraction ?? {}), ambientes: extracted.ambientes };
+    // Se acumula sobre lo que ya se puso en este mismo patch (moneda_explicita), no se reemplaza.
+    patch.rawExtraction = {
+      ...(existing?.rawExtraction ?? {}),
+      ...((patch.rawExtraction as object | undefined) ?? {}),
+      ambientes: extracted.ambientes,
+    };
   }
 
   let requirementId: string;

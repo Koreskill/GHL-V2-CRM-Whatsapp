@@ -186,6 +186,58 @@ La campanita cuenta solo lo **no visto** (`message_triage.seen_at`); abrir la co
 
 `properties.manually_edited_at` con fecha = la sincronización **no pisa** esa propiedad ni la pausa por ausencia. Se limpia con «Volver a sincronizar desde la hoja» en su ficha. El resumen de la sincronización dice cuántas se saltearon por esto, para que no parezca que fallaron. Una propiedad cargada a mano tiene `external_id` null y la hoja no la toca nunca.
 
+## Motor conversacional: el bot ve el catálogo y no puede inventar (Fase 14)
+
+Qué estaba roto (2026-09-24, en producción): el bot **nunca miraba el catálogo** — solo veía propiedades ya vinculadas a una oportunidad, así que a un cliente nuevo le decía "no tengo" aunque la propiedad existiera. Y con la lista vacía y el cliente insistiendo, **inventó dos departamentos** con precio, metros y amenities. La regla "no inventes" del prompt no alcanzó. Todo lo de abajo existe por eso.
+
+### Flujo (`triage/compose.ts` compone, `triage/run.ts` envía)
+
+`composeReply` hace todo menos mandar: clasifica (Jev), enruta, actualiza el perfil, **busca en el catálogo**, redacta, valida y arma las fichas. `run.ts` pone los interruptores, reclama el mensaje, envía y registra. Separados para que la evaluación corra conversaciones reales **sin mandar WhatsApp**.
+
+### Búsqueda (`catalog-search.ts`, `retrieval.ts`)
+
+- Cuatro modos: **referencia** (nombró una propiedad: pegó la tarjeta, el título, el precio, el link), **conversación** (pregunta por lo ya mostrado: "¿tenés fotos?"), **búsqueda** (describe lo que busca), **ninguna** (hay que preguntar).
+- Una referencia exige que la propiedad **se destaque**: "algo en Centro" coincide con 16 y es una búsqueda, no una referencia.
+- **Solo se ofrece `disponible` o `reservada`.** Una vendida o alquilada nunca es una opción.
+- **El presupuesto se compara en la misma moneda.** Sin moneda explícita se infiere del catálogo de ESA inmobiliaria para esa operación (acá: ventas en USD, alquileres en ARS). `prospect_requirements.currency` tiene default USD, así que la moneda del cliente se marca aparte en `raw_extraction.moneda_explicita`.
+- Con coincidencias exactas se muestran SOLO esas; las alternativas (otra zona, hasta 15% arriba) aparecen solo si no hay nada exacto. Venta y alquiler no se mezclan nunca, ni como alternativa.
+- En modo conversación se filtra por la operación actual: si le mostraste una venta y después dijo "alquilar", esa venta ya no es "de lo que se venía hablando".
+- El perfil (qué busca) se carga **por contacto**, no solo por la oportunidad: antes un cliente nuevo perdía entre turnos todo lo que había dicho y el bot le volvía a preguntar.
+
+### Las fichas las arma el CÓDIGO (`listing-cards.ts`)
+
+El modelo recibe las propiedades con una clave corta (P1, P2…) y devuelve en `mostrar` cuáles adjuntar. **El texto de la ficha (precio, dormitorios, metros, enlace) sale de la base.** El modelo no escribe fichas, así que no tiene dónde poner un precio inventado. Si el cliente nombró una propiedad puntual, su ficha va siempre. Negrita `*así*` solo en WhatsApp (en Instagram se verían los asteriscos).
+
+### Validador (`guard.ts`): lo que el prompt pide, verificado en código
+
+Revisa el texto del modelo contra los datos. Si falla, **un reintento** con la corrección concreta; si vuelve a fallar, sale una respuesta **armada por código** (verdadera por construcción). Bloquea: montos y superficies que no existen, formato de aviso sin propiedades reales, "no tengo" cuando la búsqueda encontró, **fotos/video/tour que esa propiedad no tiene** (por tipo de medio y oración por oración), ofrecer "zonas cercanas" sin alternativas, plazos que la inmobiliaria no definió ("en 24 horas"), compromisos (confirmar visita, aceptar precio), ofrecer mandar la ficha que ya va adjunta, repetir textual el mensaje anterior, y dialecto (renta, colonia, recámara, tuteo).
+
+Trampas que ya mordieron — **no volver a pisarlas**:
+- **`\b` después de "m²" no matchea nunca**: "²" no es carácter de palabra. Se usa `(?![\p{L}\d])` con flag `u`. El control de superficies no funcionó hasta que se vio esto.
+- **"m" suelta no es millón**: en inmobiliaria es metros. "65 m²" se leía como 65 millones.
+- **"millon" va antes que "mil"** en la alternancia, o "1,5 millones" da 1.500.
+- **El tuteo se busca CON tildes**: "buscás" (voseo) y "buscas" (tuteo) difieren solo en la tilde. Con el texto normalizado el validador frenaba respuestas correctas.
+- **Los dígitos de una URL no son montos**: se sacan las URLs antes de extraer.
+- **No editar regex a través de scripts de Node con template literals**: `\b` se convierte en un carácter de retroceso real (0x08) y `\s` pierde la barra, sin error. Usar Edit directo o `String.raw`. Verificar con `grep -P '[\x00-\x08]'`.
+
+### Cuándo avisa al equipo y cuándo pausa el bot
+
+- **Derivar** (reclamo, pide una persona, legal): acuse + **pausa** la IA del hilo.
+- **Avisar** (el bot contesta y **sigue activo**, aparece en la campanita): pedido de visita, oferta de precio, tasación, propietario que quiere vender, o cuando el texto **promete** algo de una persona ("lo consulto con el equipo", "paso tu oferta al asesor"). Esa promesa se detecta en el texto y dispara el aviso sí o sí: antes el bot decía "ya consulté" y nadie se enteraba.
+- **La oferta la detecta Jev** (`hace_oferta`, pregunta tipada). El bot da el precio publicado y pasa la oferta; nunca la acepta ni la rechaza, eso lo decide el propietario.
+- **Pedido de visita con UNA propiedad clara → se crea la visita** en Visitas como `solicitada`, sin fecha (el bot no confirma horarios), con lo que pidió el cliente en la nota. No duplica.
+- En tasación y captación **no se muestran propiedades del catálogo**: la persona habla de SU propiedad, y mostrarle una con precio es una tasación implícita.
+
+### Enlaces en la descripción (`properties/media.ts`)
+
+En la cartera real **las 40 propiedades** tenían el enlace a la publicación y el video escritos dentro de la descripción, con `source_url`/`video_url` vacíos: el bot no podía mandar la ficha de 39 de 40. `mediaFromDescription` los extrae (publicación, YouTube/Vimeo, tour, fotos), descarta enlaces de relleno (`/p/xxxxxxx`), respeta paréntesis que son parte del enlace y sube `http` a `https`. **Solo completa campos vacíos**: lo cargado siempre manda. Lo aplican la sincronización y la carga del catálogo; `npm run backfill:media` (con `--aplicar`) completa lo que ya estaba en la base.
+
+### Cómo se prueba
+
+- `npm test` → `test-conversational.ts`: búsqueda, fichas, validador y enlaces, sin base ni modelos. **Los casos de "lo que no puede pasar" son mensajes reales que mandó el bot.**
+- `npm run eval` → conversaciones completas contra los modelos y el catálogo **reales**, en una transacción que se revierte. No manda WhatsApp. Cuesta centavos; no está en `npm test`. Cada turno se audita contra el catálogo. `npm run eval -- <escenario>` corre uno solo.
+- Que el eval pase **no alcanza**: leer las transcripciones. Cada ronda de lectura encontró algo que ningún chequeo veía todavía.
+
 ## Plano de agencia (visión del dueño del CRM)
 
 - `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).
@@ -242,6 +294,7 @@ Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` lim
 11. Plantillas con encabezado, pie y botones, e indicador "escribiendo…"
 12. Triaje de mensajes: Jev clasifica, el código enruta y GPT redacta
 13. Etiquetado del contacto, interesados por propiedad, handover y carga manual de propiedades
+14. Motor conversacional: búsqueda en el catálogo, fichas armadas por código y validador anti-invención
 
 ## Sistema visual — Setter CRM
 

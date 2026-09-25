@@ -48,15 +48,17 @@ export const ROUTE_GOAL: Record<Route, string> = {
   busqueda_alquiler:
     "Entender qué busca para alquilar y ofrecer solo propiedades en alquiler que estén en el contexto. Si faltan zona, presupuesto o requisitos, preguntá por lo que falte.",
   captacion_propietario:
-    "Es dueña de una propiedad y la quiere ofrecer. Agradecé, pedí los datos que faltan para evaluarla (tipo, ubicación, ambientes, estado) y explicá el paso siguiente. No prometas un precio ni condiciones de comisión.",
+    "Es dueña de una propiedad y la quiere ofrecer. Agradecé y pedí SOLO los datos que todavía no dio para evaluarla (de tipo, barrio, ambientes y estado, lo que falte). Decile que un asesor lo va a contactar por este mismo chat. No prometas un precio ni condiciones de comisión. No le pidas su contacto: ya lo tenemos, está escribiendo por acá.",
   tasacion:
-    "Pide saber cuánto vale su propiedad. Explicá que la tasación la hace una persona del equipo y pedí los datos necesarios para coordinarla. NUNCA des un valor estimado.",
+    "Pide saber cuánto vale su propiedad. Explicá que la tasación la hace una persona del equipo, pedí SOLO los datos que falten para coordinarla y decile que un asesor lo contacta por este chat. NUNCA des un valor estimado, ni un rango, ni una comparación con otras propiedades. No le pidas su contacto: ya lo tenemos.",
   ficha_propiedad:
     "Consulta por una propiedad concreta. Respondé SOLO con los datos de la ficha que está en el contexto. Si un dato no está, decí que lo vas a confirmar; no lo completes.",
   coordinar_visita:
-    "Quiere ver una propiedad. Confirmá de qué propiedad se trata y pedí los días y horarios en que le queda cómodo. NO confirmes fecha ni hora: la agenda la confirma el equipo.",
+    "Quiere ver una propiedad. Si ya propuso día y hora, decile que lo anotaste y que un asesor se lo confirma, y pedile un horario alternativo por si ese no se puede. Si no propuso, pedile días y horarios que le queden cómodos. Si no está claro cuál propiedad quiere ver, preguntalo. NUNCA confirmes la fecha: la agenda la confirma el equipo.",
   derivar_reclamo:
-    "Hay un reclamo o disconformidad. Escribí un acuse breve: que se registró, que lo va a mirar una persona del equipo y cuándo. NO prometas una solución, no expliques causas ni asignes responsabilidades.",
+    // Antes decía "…una persona del equipo y cuándo", y el modelo inventó "dentro de las próximas
+    // 24 horas": un plazo que la inmobiliaria nunca definió. Prometerlo y no cumplirlo empeora el reclamo.
+    "Hay un reclamo o disconformidad. Escribí un acuse breve: que se registró y que lo va a revisar una persona del equipo. NO prometas una solución ni un plazo, no expliques causas ni asignes responsabilidades.",
   derivar_humano:
     "Pidió hablar con una persona. Confirmalo en una línea y avisá que alguien del equipo sigue la conversación. No intentes resolver la consulta.",
   seguimiento:
@@ -69,10 +71,27 @@ export const ROUTE_GOAL: Record<Route, string> = {
 export type Decision = {
   intent: Intent;
   intentConfidence: number;
+  /** Todas las probabilidades de la intención. Sirven para medir la confianza de la FAMILIA. */
+  intentProbabilities?: Record<string, number>;
   containsVisitRequest: number;
   requiresHuman: number;
   urgency: Urgency;
 };
+
+/**
+ * Intenciones comerciales de búsqueda: todas terminan en lo mismo, mostrar propiedades.
+ *
+ * Si Jev duda ENTRE ellas ("Depto pichincha": 0.59 consulta por propiedad, 0.26 alquiler), la
+ * duda no cambia qué hacer. Pedir una aclaración ahí es mala experiencia: el cliente escribió
+ * claramente qué busca y le devolvemos una pregunta en vez de propiedades.
+ */
+export const COMMERCIAL_FAMILY: readonly Intent[] = ["buy", "rent", "property_info", "visit"] as const;
+
+export function familyConfidence(decision: Decision): number {
+  const probs = decision.intentProbabilities;
+  if (!probs || !COMMERCIAL_FAMILY.includes(decision.intent)) return decision.intentConfidence;
+  return COMMERCIAL_FAMILY.reduce((sum, i) => sum + (probs[i] ?? 0), 0);
+}
 
 export type RoutingPolicy = {
   /** Debajo de esta confianza en `intent`, no se enruta a ciegas: se pide aclaración o se deriva. */
@@ -149,7 +168,10 @@ export function routeFor(decision: Decision, policy: RoutingPolicy = DEFAULT_POL
   }
 
   // Baja confianza: preguntar es más barato que contestar sobre una intención equivocada.
-  if (intentConfidence < policy.minConfidence) {
+  // PERO si la duda es entre intenciones comerciales, lo que se mide es la familia entera: la
+  // acción es la misma (mostrar propiedades) y preguntar sería hacer esperar al cliente por nada.
+  const family = familyConfidence(decision);
+  if (intentConfidence < policy.minConfidence && family < policy.minConfidence) {
     return {
       route: "aclaracion",
       reason: `Confianza baja en la intención (${intentConfidence.toFixed(2)} < ${policy.minConfidence})`,

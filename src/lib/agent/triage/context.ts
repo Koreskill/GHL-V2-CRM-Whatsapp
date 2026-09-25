@@ -61,10 +61,13 @@ export type TriageContext = {
   } | null;
   queBusca: {
     operacion: string | null;
+    tipos: string[];
     zonas: string[];
     presupuestoMin: string | null;
     presupuestoMax: string | null;
     moneda: string;
+    /** La columna tiene default USD: esto dice si el cliente la dijo de verdad. */
+    monedaExplicita: boolean;
     dormitoriosMin: number | null;
   } | null;
   propiedadesDeInteres: TriageProperty[];
@@ -152,6 +155,10 @@ export async function buildTriageContext(input: {
   const deal = dealRow[0] ?? null;
 
   const [requirement, props, visitRows] = await Promise.all([
+    // El perfil se busca POR CONTACTO, no solo por la oportunidad. Antes se cargaba únicamente
+    // desde deal.prospect_requirement_id: un cliente nuevo no tiene oportunidad, así que lo que
+    // dijo en un mensaje ("Pichincha", "alquiler", "60.000") se guardaba pero el turno siguiente
+    // lo veía vacío, y el bot volvía a preguntar lo mismo.
     deal?.prospectRequirementId
       ? db
           .select()
@@ -163,7 +170,20 @@ export async function buildTriageContext(input: {
             ),
           )
           .limit(1)
-      : Promise.resolve([]),
+      : contactId
+        ? db
+            .select()
+            .from(prospectRequirements)
+            .where(
+              and(
+                eq(prospectRequirements.contactId, contactId),
+                eq(prospectRequirements.organizationId, organizationId),
+                eq(prospectRequirements.status, "activo"),
+              ),
+            )
+            .orderBy(desc(prospectRequirements.updatedAt))
+            .limit(1)
+        : Promise.resolve([]),
 
     deal
       ? db
@@ -235,10 +255,12 @@ export async function buildTriageContext(input: {
     queBusca: req
       ? {
           operacion: req.operation,
+          tipos: req.propertyTypes,
           zonas: req.zones,
           presupuestoMin: req.priceMin,
           presupuestoMax: req.priceMax,
           moneda: req.currency,
+          monedaExplicita: (req.rawExtraction as { moneda_explicita?: boolean } | null)?.moneda_explicita === true,
           dormitoriosMin: req.bedroomsMin,
         }
       : null,

@@ -99,10 +99,28 @@ export const TRIAGE_QUESTIONS: Record<string, DecisionQuestion> = {
     type: "noul",
     instructions:
       "¿Este mensaje necesita que lo atienda una persona del equipo en lugar de una respuesta automática?",
+    // OJO con agrandar este criterio. Tenía "el mensaje es ambiguo" y "falta información para
+    // responder", y eso describe CUALQUIER primer mensaje: "Quiero información" se derivaba a una
+    // persona y apagaba el bot. La ambigüedad se resuelve preguntando (ruta de aclaración), no
+    // derivando. Esto es solo para lo que un bot no debe tocar.
     criteria: {
-      true: "Hay un reclamo, enojo o disconformidad; pide hablar con una persona; toca un asunto legal, contractual o financiero delicado (rescisión, depósito, mora, escritura, juicio); hay una situación de riesgo; el mensaje es ambiguo en algo importante; o falta información para responder con seguridad.",
+      true: "Hay un reclamo, enojo o disconformidad; pide explícitamente hablar con una persona; toca un asunto legal, contractual o financiero delicado (rescisión, depósito de garantía, mora, deuda, escritura, juicio, estafa); o hay una situación de riesgo o urgencia personal.",
       false:
-        "Es una consulta comercial corriente que se puede contestar con los datos verificados de la inmobiliaria, sin comprometer nada que el sistema no haya confirmado.",
+        "Es una consulta comercial o un mensaje corriente, aunque sea breve, vago o le falten datos: un saludo, un «quiero información», una pregunta por propiedades, precios, zonas, fotos o visitas. Que falten datos NO requiere una persona: se le pregunta.",
+    },
+  },
+
+  // Una oferta no es una intención aparte (quien ofrece sigue queriendo comprar), así que el
+  // modelo a veces la pasaba y a veces no: una vez contestó "el precio está fijado y no puedo
+  // modificarlo" a un comprador con efectivo, sin avisarle a nadie. Aceptar o rechazar una oferta
+  // lo decide el propietario, nunca el bot.
+  hace_oferta: {
+    type: "noul",
+    instructions:
+      "¿El contacto propone un precio distinto al publicado, hace una contraoferta o pide una rebaja o descuento?",
+    criteria: {
+      true: "Ofrece un monto menor al publicado («¿me lo dejan en 75?», «ofrezco 80 mil»), pide descuento o rebaja, pregunta si el precio es negociable, o condiciona la compra a un precio distinto.",
+      false: "Pregunta el precio, dice su presupuesto para buscar, o comenta que algo es caro sin proponer otro monto ni pedir rebaja.",
     },
   },
 

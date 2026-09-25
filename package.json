@@ -14,13 +14,15 @@
     "db:counts": "tsx scripts/db-counts.ts",
     "zernio:openapi": "node scripts/zernio-openapi.mjs && openapi-typescript openapi/zernio.slim.json -o src/lib/zernio/openapi.d.ts",
     "zernio:check": "tsx scripts/zernio-check.ts",
-    "test": "tsx scripts/test-signature.ts && tsx scripts/test-units.ts && tsx scripts/test-catalog.ts && tsx scripts/test-triage.ts && tsx scripts/test-tags.ts && tsx scripts/test-deals.ts && tsx scripts/test-visits.ts && tsx scripts/test-sync.ts && tsx scripts/test-triage-db.ts",
+    "test": "tsx scripts/test-signature.ts && tsx scripts/test-units.ts && tsx scripts/test-catalog.ts && tsx scripts/test-triage.ts && tsx scripts/test-conversational.ts && tsx scripts/test-tags.ts && tsx scripts/test-deals.ts && tsx scripts/test-visits.ts && tsx scripts/test-sync.ts && tsx scripts/test-triage-db.ts",
     "zernio:webhook": "tsx scripts/zernio-webhook.ts",
     "test:e2e": "tsx scripts/test-webhook-e2e.ts",
     "test:network": "tsx scripts/test-network-flow.ts",
     "zernio:sync": "tsx scripts/zernio-sync.ts",
     "zernio:import": "tsx scripts/zernio-import.ts",
-    "triage:calibrar": "tsx scripts/triage-calibrar.ts"
+    "triage:calibrar": "tsx scripts/triage-calibrar.ts",
+    "eval": "tsx scripts/eval-conversations.ts",
+    "backfill:media": "tsx scripts/backfill-media.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

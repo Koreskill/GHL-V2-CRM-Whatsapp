@@ -4,6 +4,7 @@ import { properties, propertySyncConfigs } from "@/db/schema";
 import { reportIncident, resolveIncidents } from "@/lib/incidents/report";
 import { safeError } from "@/lib/safe-error";
 import { readSheet } from "./client";
+import { mediaFromDescription } from "@/lib/properties/media";
 
 // ─── Mapeo de columnas ──────────────────────────────────────────────────────
 // Se reconoce el encabezado por varios nombres posibles, sin acentos ni mayúsculas, para que la
@@ -320,6 +321,9 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
     if (!cell(row, "coverUrl")) rowIssues.push("Sin portada");
     if (!cell(row, "title")) rowIssues.push("Sin título");
 
+    // Enlaces escritos en la descripción: completan las columnas vacías, nunca las pisan.
+    const fromText = mediaFromDescription(cell(row, "description"));
+
     const values = {
       organizationId: orgId,
       externalId,
@@ -342,10 +346,10 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
       parking: int(cell(row, "parking")),
       amenities: list(cell(row, "amenities")),
       coverUrl,
-      galleryUrls: urlList(cell(row, "galleryUrls")),
-      videoUrl: url(cell(row, "videoUrl")),
-      tour360Url: url(cell(row, "tour360Url")),
-      sourceUrl: url(cell(row, "sourceUrl")),
+      galleryUrls: urlList(cell(row, "galleryUrls")).length ? urlList(cell(row, "galleryUrls")) : fromText.fotos,
+      videoUrl: url(cell(row, "videoUrl")) ?? fromText.video,
+      tour360Url: url(cell(row, "tour360Url")) ?? fromText.tour,
+      sourceUrl: url(cell(row, "sourceUrl")) ?? fromText.ficha,
       internalNotes: cell(row, "internalNotes") ?? null,
       externalUpdatedAt: date(cell(row, "externalUpdatedAt")),
       syncedAt: new Date(),

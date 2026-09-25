@@ -1,33 +1,36 @@
-import { and, eq, gt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { agentConfigs, conversations, messages, messageTriage, type TriageStatus } from "@/db/schema";
-import { aiDecide, readChoice, readNoul, readScore } from "@/lib/ai/decisions";
-import { resolveModel } from "@/lib/ai/openrouter";
+import {
+  agentConfigs,
+  conversations,
+  deals,
+  messages,
+  messageTriage,
+  visitEvents,
+  visits,
+  type TriageStatus,
+} from "@/db/schema";
 import { reportIncident } from "@/lib/incidents/report";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
 import { clearAgentTyping, setAgentTyping } from "@/lib/inbox/typing";
 import { safeError } from "@/lib/safe-error";
 import { resolveAgentConfig } from "../config";
-import { buildTriageContext, stateForDecision } from "./context";
-import { generateReply } from "./generate";
-import { INTENTS, TAG_QUESTIONS, TRIAGE_QUESTIONS, URGENCY_LEVELS, type Intent, type Urgency } from "./questions";
-import { extractProfileFields } from "./extract";
-import { applyTags, markPropertyInterest, readTagDecisions } from "./tags";
-import { DEFAULT_POLICY, routeFor, type RoutingPolicy } from "./routes";
+import { composeReply, DEFAULT_DECISION_MODEL, type ComposeResult } from "./compose";
+import { markPropertyShown } from "./tags";
+import { DEFAULT_POLICY, type RoutingPolicy } from "./routes";
 
 /**
- * Flujo completo de un mensaje entrante:
+ * Flujo de un mensaje entrante, de punta a punta.
  *
- *   1. Jev clasifica (Decisions API) -> decisiones tipadas con probabilidades.
- *   2. El CÓDIGO elige la ruta con una tabla determinista.
- *   3. GPT redacta siguiendo esa ruta.
- *   4. Se valida, se aplican las reglas de envío y se registra todo en message_triage.
+ * Qué se contesta lo decide `composeReply` (clasificar, buscar en el catálogo, redactar,
+ * validar). Este archivo pone los interruptores, reclama el mensaje para no procesarlo dos veces,
+ * manda la respuesta y registra el resultado.
  *
- * El envío sigue saliendo por `deliverMessage`: sigue habiendo un solo camino de salida.
+ * El envío sigue saliendo por `deliverMessage`: un solo camino de salida.
  */
 
-export const DEFAULT_DECISION_MODEL = () => process.env.OPENROUTER_DECISION_MODEL || "typesafe/jev-1.13";
+export { DEFAULT_DECISION_MODEL };
 
 // Si el trabajo se procesa mucho después, no se contesta como si el mensaje fuera de recién.
 const MAX_DELAY_MS = 10 * 60 * 1000;
@@ -38,10 +41,10 @@ export type TriageResult =
   | { status: "skipped"; reason: string }
   | { status: TriageStatus; triageId: string; route?: string; intent?: string };
 
-type Policy = RoutingPolicy & { autoReply: "auto" | "borrador" | "off" };
+export type Policy = RoutingPolicy & { autoReply: "auto" | "borrador" | "off" };
 
 /** Política de la inmobiliaria: canal -> global -> default del código, como el resto de la cascada. */
-async function resolvePolicy(orgId: string, channel: string): Promise<Policy> {
+export async function resolvePolicy(orgId: string, channel: string): Promise<Policy> {
   const rows = await getDb()
     .select({
       scope: agentConfigs.scope,
@@ -52,22 +55,20 @@ async function resolvePolicy(orgId: string, channel: string): Promise<Policy> {
     .from(agentConfigs)
     .where(eq(agentConfigs.organizationId, orgId));
 
-  const pick = <T>(get: (r: (typeof rows)[number]) => T | null | undefined): T | null => {
-    const own = rows.find((r) => r.scope === channel);
-    const global = rows.find((r) => r.scope === "global");
-    return get(own as (typeof rows)[number]) ?? get(global as (typeof rows)[number]) ?? null;
-  };
+  const own = rows.find((r) => r.scope === channel);
+  const global = rows.find((r) => r.scope === "global");
+  const pick = <K extends keyof (typeof rows)[number]>(key: K) => own?.[key] ?? global?.[key] ?? null;
 
-  const num = (value: string | null, fallback: number) => {
-    const n = value === null ? NaN : Number(value);
+  const num = (value: unknown, fallback: number) => {
+    const n = value === null || value === undefined ? NaN : Number(value);
     return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback;
   };
 
-  const mode = pick((r) => r?.autoReply);
+  const mode = pick("autoReply");
   return {
     autoReply: mode === "borrador" || mode === "off" ? mode : "auto",
-    minConfidence: num(pick((r) => r?.minConfidence), DEFAULT_POLICY.minConfidence),
-    humanThreshold: num(pick((r) => r?.humanThreshold), DEFAULT_POLICY.humanThreshold),
+    minConfidence: num(pick("minConfidence"), DEFAULT_POLICY.minConfidence),
+    humanThreshold: num(pick("humanThreshold"), DEFAULT_POLICY.humanThreshold),
     visitThreshold: DEFAULT_POLICY.visitThreshold,
   };
 }
@@ -77,11 +78,7 @@ async function resolvePolicy(orgId: string, channel: string): Promise<Policy> {
  * El índice único sobre message_id hace que dos corridas simultáneas del mismo mensaje
  * (un reintento del webhook, por ejemplo) no lo clasifiquen ni lo contesten dos veces.
  */
-async function claim(input: {
-  organizationId: string;
-  conversationId: string;
-  messageId: string;
-}): Promise<string | null> {
+async function claim(input: { organizationId: string; conversationId: string; messageId: string }): Promise<string | null> {
   const [row] = await getDb()
     .insert(messageTriage)
     .values({ ...input, status: "error", error: "en proceso" })
@@ -112,31 +109,146 @@ async function superseded(conversationId: string, trigger: { id: string; sentAt:
   const [newer] = await getDb()
     .select({ id: messages.id })
     .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, conversationId),
-        gt(messages.sentAt, trigger.sentAt),
-        ne(messages.id, trigger.id),
-      ),
-    )
+    .where(and(eq(messages.conversationId, conversationId), gt(messages.sentAt, trigger.sentAt), ne(messages.id, trigger.id)))
     .limit(1);
   return Boolean(newer);
 }
 
-export async function triageIncomingMessage(
-  conversationId: string,
-  opts: { triggerMessageId: string },
-): Promise<TriageResult> {
+/**
+ * Registra qué propiedades se le mostraron al contacto.
+ *
+ * Una propiedad mostrada es el comienzo de una oportunidad: si el contacto no tenía una abierta,
+ * se crea. Sin esto, lo que se le mostró no quedaba en ningún lado, el turno siguiente no sabía
+ * de qué propiedad se venía hablando ("¿tenés fotos?") y la ficha no lo listaba en Interesados.
+ */
+/** La oportunidad abierta del contacto, o una nueva si no tenía. Una sola: no se duplica. */
+async function ensureDeal(input: { organizationId: string; contactId: string; conversationId: string }): Promise<string> {
+  const db = getDb();
+  const [open] = await db
+    .select({ id: deals.id })
+    .from(deals)
+    .where(and(eq(deals.contactId, input.contactId), eq(deals.organizationId, input.organizationId), eq(deals.status, "abierta")))
+    .orderBy(desc(deals.updatedAt))
+    .limit(1);
+  if (open) return open.id;
+
+  const [created] = await db
+    .insert(deals)
+    .values({
+      organizationId: input.organizationId,
+      contactId: input.contactId,
+      conversationId: input.conversationId,
+      stage: "prospecto",
+    })
+    .returning({ id: deals.id });
+  return created.id;
+}
+
+async function recordShown(input: {
+  organizationId: string;
+  contactId: string;
+  conversationId: string;
+  propertyIds: string[];
+}) {
+  if (!input.propertyIds.length) return;
+  const dealId = await ensureDeal(input);
+  for (const propertyId of input.propertyIds) {
+    await markPropertyShown({ organizationId: input.organizationId, dealId, propertyId });
+  }
+}
+
+/**
+ * Registra el pedido de visita en el módulo Visitas, como "solicitada" y SIN fecha: el bot no
+ * puede confirmar un horario, eso lo hace el asesor. Lo que pidió el cliente ("el sábado a las
+ * 11") queda en la nota para que el asesor lo vea sin abrir el chat.
+ *
+ * No duplica: si ya hay una visita abierta (solicitada o agendada) a esa propiedad en esa
+ * oportunidad, se le suma la nota en vez de crear otra.
+ */
+async function recordVisitRequest(input: {
+  organizationId: string;
+  contactId: string;
+  conversationId: string;
+  propertyId: string;
+  note: string;
+}) {
+  const db = getDb();
+  const dealId = await ensureDeal(input);
+  await markPropertyShown({ organizationId: input.organizationId, dealId, propertyId: input.propertyId });
+
+  const [existing] = await db
+    .select({ id: visits.id, notes: visits.notes })
+    .from(visits)
+    .where(
+      and(
+        eq(visits.dealId, dealId),
+        eq(visits.propertyId, input.propertyId),
+        eq(visits.organizationId, input.organizationId),
+        inArray(visits.status, ["solicitada", "agendada"]),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(visits)
+      .set({ notes: [existing.notes, input.note].filter(Boolean).join("\n").slice(0, 2000) })
+      .where(eq(visits.id, existing.id));
+    return;
+  }
+
+  const [visit] = await db
+    .insert(visits)
+    .values({
+      organizationId: input.organizationId,
+      dealId,
+      contactId: input.contactId,
+      propertyId: input.propertyId,
+      status: "solicitada",
+      notes: input.note,
+    })
+    .returning({ id: visits.id });
+
+  await db
+    .insert(visitEvents)
+    .values({ organizationId: input.organizationId, visitId: visit.id, action: "solicitada", toValue: "por el agente" })
+    .catch(() => {});
+}
+
+function persistable(c: ComposeResult) {
+  return {
+    intent: c.classification?.intent ?? null,
+    intentConfidence: c.classification ? String(c.classification.intentConfidence) : null,
+    intentProbabilities: c.classification?.intentProbabilities ?? {},
+    containsVisitRequest: c.classification ? String(c.classification.containsVisitRequest) : null,
+    requiresHuman: c.classification ? String(c.classification.requiresHuman) : null,
+    urgency: c.classification?.urgency ?? null,
+    decisionModel: c.classification?.decisionModel ?? null,
+    decisionId: c.classification?.decisionId ?? null,
+    route: c.routing?.route ?? null,
+    routeReason: c.routing?.reason ?? null,
+    replyModel: c.replyModel,
+    draftText: c.text,
+    internalSummary: c.reply?.internal_summary || null,
+    missingInformation: c.reply?.missing_information ?? [],
+    suggestedCrmUpdates: {
+      ...(c.reply?.suggested_crm_updates ?? {}),
+      // Rastro de cómo salió la respuesta: sirve para ver cuántas veces el validador tuvo que frenar.
+      _origen: c.source,
+      _busqueda: c.retrieval
+        ? { modo: c.retrieval.mode, ofrecidas: c.retrieval.offered.length, coincidencias: c.retrieval.totalExact }
+        : null,
+      _bloqueos: c.violations.map((v) => v.code),
+    },
+    handoffReason: c.handoffReason,
+  };
+}
+
+export async function triageIncomingMessage(conversationId: string, opts: { triggerMessageId: string }): Promise<TriageResult> {
   const db = getDb();
 
   const [trigger] = await db
-    .select({
-      id: messages.id,
-      sentAt: messages.sentAt,
-      direction: messages.direction,
-      body: messages.body,
-      organizationId: messages.organizationId,
-    })
+    .select({ id: messages.id, sentAt: messages.sentAt, direction: messages.direction, body: messages.body })
     .from(messages)
     .where(and(eq(messages.id, opts.triggerMessageId), eq(messages.conversationId, conversationId)));
   if (!trigger || trigger.direction !== "inbound") return { status: "skipped", reason: "trigger_not_found" };
@@ -145,13 +257,11 @@ export async function triageIncomingMessage(
   const [conv] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!conv) return { status: "skipped", reason: "conversation_not_found" };
 
-  // Doble interruptor, igual que antes: el hilo Y el canal.
+  // Doble interruptor: el hilo Y el canal.
   if (!conv.aiEnabled) return { status: "skipped", reason: "conversation_ai_off" };
   const config = await resolveAgentConfig(conv.organizationId, conv.channel);
   if (!config.enabled) return { status: "skipped", reason: "channel_off" };
-  if (computeWindow(conv.channel, conv.lastInboundAt).state !== "open") {
-    return { status: "skipped", reason: "window_closed" };
-  }
+  if (computeWindow(conv.channel, conv.lastInboundAt).state !== "open") return { status: "skipped", reason: "window_closed" };
   if (await superseded(conversationId, trigger)) return { status: "skipped", reason: "superseded" };
 
   const text = trigger.body?.trim();
@@ -171,11 +281,7 @@ export async function triageIncomingMessage(
   if (!process.env.OPENROUTER_API_KEY) return { status: "skipped", reason: "openrouter_key_missing" };
 
   // Idempotencia: si ya lo reclamó otra corrida, se corta sin gastar nada.
-  const triageId = await claim({
-    organizationId: conv.organizationId,
-    conversationId,
-    messageId: trigger.id,
-  });
+  const triageId = await claim({ organizationId: conv.organizationId, conversationId, messageId: trigger.id });
   if (!triageId) return { status: "skipped", reason: "already_processed" };
 
   const policy = await resolvePolicy(conv.organizationId, conv.channel);
@@ -187,234 +293,73 @@ export async function triageIncomingMessage(
   await setAgentTyping(conversationId, conv.organizationId, db);
 
   try {
-    const ctx = await buildTriageContext({
+    const composed = await composeReply({
       organizationId: conv.organizationId,
       conversationId,
       channel: conv.channel,
       contactId: conv.contactId,
-      incomingText: text,
-    });
-
-    // ── 1. Jev clasifica ──
-    // Modelo de clasificación: config del canal -> ai_model_configs -> variable de entorno.
-    // resolveModel cae en OPENROUTER_MODEL (el de chat), que NO sirve para Decisions, así que
-    // solo se usa su valor si la organización configuró uno explícitamente para "calificacion".
-    const configured = await resolveModel(conv.organizationId, "calificacion", DEFAULT_DECISION_MODEL());
-    const decisionModel = config.decisionModel?.trim() || configured.model;
-
-    const decided = await aiDecide({
-      organizationId: conv.organizationId,
-      fn: "calificacion",
-      model: decisionModel,
-      state: stateForDecision(ctx),
-      questions: { ...TRIAGE_QUESTIONS, ...TAG_QUESTIONS },
+      text,
+      config,
+      policy,
       sessionId: conversationId,
       requestRef: { conversationId, messageId: trigger.id },
     });
 
-    if (!decided.success) {
-      await finish(triageId, { status: "error", error: decided.error, decisionModel });
-      await reportIncident({
-        organizationId: conv.organizationId,
-        module: "agente",
-        key: `jev:${decisionModel}`,
-        message: `No se pudo clasificar el mensaje con ${decisionModel}`,
-        detail: decided.error,
-        context: { channel: conv.channel },
-      });
+    const record = persistable(composed);
+    const route = composed.routing?.route;
+    const intent = composed.classification?.intent;
+
+    // No se pudo ni clasificar: una persona tiene que verlo, y el cliente no queda en visto.
+    if (composed.disposition === "error") {
+      await finish(triageId, { ...record, status: "error", error: composed.error });
+      await pauseAi(conversationId, conv.organizationId);
+      if (policy.autoReply === "auto") {
+        await deliverMessage(conversationId, {
+          text: "Recibimos tu mensaje. En breve te responde una persona del equipo.",
+          source: "agent",
+        });
+      }
       return { status: "error", triageId };
     }
 
-    const answers = decided.data.answers;
-    const intentAnswer = readChoice(answers.intent, INTENTS);
-    const visitProb = readNoul(answers.contains_visit_request) ?? 0;
-    const humanProb = readNoul(answers.requires_human) ?? 1; // sin dato, se asume que sí
-    const urgencyAnswer = readScore(answers.urgency, URGENCY_LEVELS.length);
-
-    // Si ni siquiera se pudo leer la intención, no se enruta a ciegas: lo mira una persona.
-    if (!intentAnswer) {
-      await finish(triageId, {
-        status: "derivado",
-        decisionModel: decided.data.model,
-        decisionId: decided.data.id ?? null,
-        route: "aclaracion",
-        routeReason: "No se pudo leer una intención válida de la clasificación",
-        error: null,
-      });
-      await pauseAi(conversationId, conv.organizationId);
-      return { status: "derivado", triageId };
+    if (composed.disposition === "descartar") {
+      await finish(triageId, { ...record, status: "descartado", error: null });
+      return { status: "descartado", triageId, route, intent };
     }
 
-    const intent = intentAnswer.choice as Intent;
-    const urgency: Urgency = URGENCY_LEVELS[urgencyAnswer?.level ?? 0];
-
-    // ── 2. El código elige la ruta ──
-    const routing = routeFor(
-      {
-        intent,
-        intentConfidence: intentAnswer.confidence,
-        containsVisitRequest: visitProb,
-        requiresHuman: humanProb,
-        urgency,
-      },
-      policy,
-    );
-
-    const classification = {
-      intent,
-      intentConfidence: String(intentAnswer.confidence),
-      intentProbabilities: intentAnswer.probabilities,
-      containsVisitRequest: String(visitProb),
-      requiresHuman: String(humanProb),
-      urgency,
-      decisionModel: decided.data.model,
-      decisionId: decided.data.id ?? null,
-      route: routing.route,
-      routeReason: routing.reason,
-    };
-
-    // El spam no abre conversación comercial ni ocupa a nadie del equipo.
-    if (routing.route === "spam") {
-      await finish(triageId, { ...classification, status: "descartado", error: null });
-      return { status: "descartado", triageId, route: routing.route, intent };
-    }
-
-    // ── 2b. Etiquetado del contacto ──
-    // Jev ya devolvió lo tipado (operación, tipo, urgencia, forma de pago, temperatura).
-    // Los valores libres (zonas, presupuesto, ambientes) los extrae el modelo de chat: una
-    // pregunta de opciones no puede devolver "Pichincha y Centro" ni "hasta 60.000".
-    const replyModelConfig = await resolveModel(conv.organizationId, "conversacional", config.model);
-    const tagDecisions = readTagDecisions(answers);
-
-    if (conv.contactId) {
-      // La extracción se saltea cuando no hay nada comercial que extraer: no se paga un token
-      // por un reclamo o un pedido de hablar con alguien.
-      const vaCorresponder = !routing.handoff && routing.route !== "aclaracion";
-      const extractModel = await resolveModel(conv.organizationId, "extraccion", replyModelConfig.model);
-      const extracted = vaCorresponder
-        ? await extractProfileFields({
-            ctx,
-            model: extractModel.model,
-            provider: extractModel.provider,
-            params: extractModel.params,
-          })
-        : ({ success: false, error: "no corresponde" } as const);
-
-      await applyTags({
-        organizationId: conv.organizationId,
-        contactId: conv.contactId,
-        conversationId,
-        decisions: tagDecisions,
-        extracted: extracted.success ? extracted.fields : {},
-      }).catch(() => {
-        // Etiquetar es información de apoyo: si falla, el contacto igual tiene que recibir respuesta.
-      });
-
-      // Interés concreto en algo que ya se le mostró: alimenta "Interesados" en la ficha.
-      if (tagDecisions.interestedInShownProperty >= 0.6 && tagDecisions.temperature) {
-        await markPropertyInterest({
-          organizationId: conv.organizationId,
-          contactId: conv.contactId,
-          temperature: tagDecisions.temperature,
-        }).catch(() => {});
-      }
-    }
-
-    // ── 3. GPT redacta ──
-    const generated = await generateReply({
-      ctx,
-      route: routing.route,
-      intent,
-      urgency,
-      handoff: routing.handoff,
-      orgPrompt: config.systemPrompt,
-      model: replyModelConfig.model,
-      provider: replyModelConfig.provider,
-      params: replyModelConfig.params,
-    });
-
-    if (!generated.success) {
-      await finish(triageId, {
-        ...classification,
-        status: "derivado",
-        replyModel: replyModelConfig.model,
-        handoffReason: "No se pudo redactar una respuesta con datos verificados",
-        error: generated.error,
-      });
-      await reportIncident({
-        organizationId: conv.organizationId,
-        module: "agente",
-        key: `redaccion:${replyModelConfig.model}`,
-        message: `El agente no pudo redactar la respuesta con ${replyModelConfig.model}`,
-        detail: generated.error,
-        context: { channel: conv.channel, route: routing.route },
-      });
-      await pauseAi(conversationId, conv.organizationId);
-      return { status: "derivado", triageId, route: routing.route, intent };
-    }
-
-    const reply = generated.reply;
-    const draft = {
-      ...classification,
-      replyModel: replyModelConfig.model,
-      draftText: reply.reply_text || null,
-      internalSummary: reply.internal_summary || null,
-      missingInformation: reply.missing_information,
-      suggestedCrmUpdates: reply.suggested_crm_updates,
-      handoffReason: reply.handoff_reason,
-    };
-
-    // ── 4. Reglas de envío ──
-    // Se deriva si: la ruta lo pide, el modelo mismo pidió derivar, o no hay texto que mandar.
-    const mustHandoff = routing.handoff || Boolean(reply.handoff_reason) || !reply.reply_text;
-    if (mustHandoff) {
-      // Se manda un ACUSE antes de pausar: dejar a alguien en visto mientras espera a una
-      // persona es peor que no tener bot. Es un acuse, no una resolución: el prompt de las
-      // rutas de derivación prohíbe prometer una solución o explicar causas.
-      // En modo borrador no sale nada: la inmobiliaria quiere revisar hasta el acuse.
+    // ── Derivación: acuse (si está en automático) y pausa ──
+    if (composed.disposition === "derivar") {
       let ackId: string | null = null;
-      if (policy.autoReply === "auto" && reply.reply_text) {
-        const ack = await deliverMessage(conversationId, { text: reply.reply_text, source: "agent" });
+      if (policy.autoReply === "auto" && composed.text) {
+        const ack = await deliverMessage(conversationId, { text: composed.text, source: "agent" });
         if (ack.ok) ackId = ack.message.id;
       }
-
-      await finish(triageId, {
-        ...draft,
-        status: "derivado",
-        handoffReason: reply.handoff_reason ?? routing.reason,
-        sentMessageId: ackId,
-        error: null,
-      });
-      // Pausa DESPUÉS del acuse: si se pausara antes, deliverMessage seguiría andando, pero
-      // el orden deja claro que lo último que hace el bot es avisar y retirarse.
+      await finish(triageId, { ...record, status: "derivado", sentMessageId: ackId, error: null });
       await pauseAi(conversationId, conv.organizationId);
-      return { status: "derivado", triageId, route: routing.route, intent };
+      return { status: "derivado", triageId, route, intent };
     }
 
-    // Modo borrador: la inmobiliaria quiere revisar antes de que salga nada.
-    if (policy.autoReply === "borrador") {
-      await finish(triageId, { ...draft, status: "borrador", error: null });
-      return { status: "borrador", triageId, route: routing.route, intent };
+    // ── Respuesta ──
+    if (policy.autoReply === "borrador" || !composed.text) {
+      await finish(triageId, { ...record, status: "borrador", error: null });
+      return { status: "borrador", triageId, route, intent };
     }
 
-    // Último control antes de enviar: mientras el modelo pensaba pudo escribir el cliente,
-    // contestar una persona o apagarse la IA.
+    // Último control: mientras se redactaba pudo escribir el cliente, contestar una persona o
+    // apagarse la IA. En esos casos queda como borrador, no se pisa a nadie.
     if (await superseded(conversationId, trigger)) {
-      await finish(triageId, { ...draft, status: "borrador", routeReason: "Llegó otro mensaje mientras se redactaba", error: null });
-      return { status: "borrador", triageId, route: routing.route, intent };
+      await finish(triageId, { ...record, status: "borrador", routeReason: "Llegó otro mensaje mientras se redactaba", error: null });
+      return { status: "borrador", triageId, route, intent };
     }
-    const [fresh] = await db
-      .select({ aiEnabled: conversations.aiEnabled })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId));
+    const [fresh] = await db.select({ aiEnabled: conversations.aiEnabled }).from(conversations).where(eq(conversations.id, conversationId));
     if (!fresh?.aiEnabled) {
-      await finish(triageId, { ...draft, status: "borrador", routeReason: "La IA se pausó mientras se redactaba", error: null });
-      return { status: "borrador", triageId, route: routing.route, intent };
+      await finish(triageId, { ...record, status: "borrador", routeReason: "La IA se pausó mientras se redactaba", error: null });
+      return { status: "borrador", triageId, route, intent };
     }
 
-    const sent = await deliverMessage(conversationId, { text: reply.reply_text, source: "agent" });
+    const sent = await deliverMessage(conversationId, { text: composed.text, source: "agent" });
     if (!sent.ok) {
-      await finish(triageId, { ...draft, status: "borrador", error: sent.error });
+      await finish(triageId, { ...record, status: "borrador", error: sent.error });
       await reportIncident({
         organizationId: conv.organizationId,
         module: "mensajeria",
@@ -423,11 +368,38 @@ export async function triageIncomingMessage(
         detail: sent.error,
         context: { channel: conv.channel },
       });
-      return { status: "borrador", triageId, route: routing.route, intent };
+      return { status: "borrador", triageId, route, intent };
     }
 
-    await finish(triageId, { ...draft, status: "enviado", sentMessageId: sent.message.id, error: null });
-    return { status: "enviado", triageId, route: routing.route, intent };
+    // Lo mostrado queda registrado en la oportunidad del contacto.
+    if (conv.contactId && composed.shownPropertyIds.length) {
+      await recordShown({
+        organizationId: conv.organizationId,
+        contactId: conv.contactId,
+        conversationId,
+        propertyIds: composed.shownPropertyIds,
+      }).catch(() => {});
+    }
+
+    // Pidió visitar una propiedad concreta: queda en Visitas como "solicitada", para el asesor.
+    if (conv.contactId && composed.visitRequest) {
+      await recordVisitRequest({
+        organizationId: conv.organizationId,
+        contactId: conv.contactId,
+        conversationId,
+        propertyId: composed.visitRequest.propertyId,
+        note: composed.visitRequest.note,
+      }).catch(() => {
+        // La visita es un registro de apoyo: si falla, el cliente ya tiene su respuesta y el
+        // equipo igual recibe el aviso por la campanita.
+      });
+    }
+
+    // Hay algo para que haga una persona (fotos que no están, un dato por confirmar): se contestó
+    // igual, el bot sigue activo, y queda en la campanita. NO se pausa: eso es solo para derivar.
+    const status = composed.notifyTeam ? "derivado" : "enviado";
+    await finish(triageId, { ...record, status, sentMessageId: sent.message.id, error: null });
+    return { status, triageId, route, intent };
   } catch (err) {
     const error = safeError(err);
     await finish(triageId, { status: "error", error });
@@ -444,3 +416,4 @@ export async function triageIncomingMessage(
     await clearAgentTyping(conversationId, conv.organizationId, db);
   }
 }
+export { ensureDeal as __ensureDeal, recordShown as __recordShown, recordVisitRequest as __recordVisitRequest };
