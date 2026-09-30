@@ -1,34 +1,107 @@
 @import "tailwindcss";
 
+/* Tokens semánticos: los componentes usan bg-card, text-ink, border-line… y nunca un color fijo.
+   El modo oscuro solo redefine estas variables, así ninguna pantalla se toca una por una. */
+:root {
+  --shell: #0d1517;
+  --shell-active: #18302f;
+  --shell-text: #e8eeee;
+  --shell-muted: #7d888c;
+
+  --canvas: #edf3f6;
+  --card: #ffffff;
+  --ink: #111d27;
+  --muted: #69737d;
+  --line: #dee5e8;
+  --field: #f3f6f8;
+
+  --primary: #1d4943;
+  --primary-hover: #214c46;
+
+  --accent-cyan: #0ea5c6;
+  --accent-purple: #7c5cd6;
+  --accent-green: #22a06b;
+  --accent-amber: #e0a526;
+  --accent-orange: #ea7a2e;
+  --accent-red: #dc4b4b;
+  --accent-slate: #7a8ea3;
+  --accent-blue: #3b82f6;
+  --accent-pink: #d6549b;
+  --accent-teal: #1f9a8f;
+  --accent-brown: #a1764f;
+  --accent-gray: #8b8f94;
+
+  --shadow-card: 0 1px 2px rgba(17, 29, 39, 0.04);
+  color-scheme: light;
+}
+
+:root.dark {
+  --shell: #090e10;
+  --shell-active: #18302f;
+  --shell-text: #e8eeee;
+  --shell-muted: #7d888c;
+
+  --canvas: #0c1214;
+  --card: #141c20;
+  --ink: #e7edf0;
+  --muted: #94a0a8;
+  --line: #26323a;
+  --field: #1b262b;
+
+  /* Teal más claro: el oscuro original no se distingue sobre fondos oscuros. */
+  --primary: #2b7a6f;
+  --primary-hover: #318a7d;
+
+  --accent-cyan: #2bb8d8;
+  --accent-purple: #9b82e6;
+  --accent-green: #36b983;
+  --accent-amber: #e8b94a;
+  --accent-orange: #f0904f;
+  --accent-red: #ec6a6a;
+  --accent-slate: #8fa2b6;
+  --accent-blue: #5b9bff;
+  --accent-pink: #e372ad;
+  --accent-teal: #3bb5aa;
+  --accent-brown: #c08f66;
+  --accent-gray: #a0a5ab;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
 @theme inline {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
-  --color-shell: #0d1517;
-  --color-shell-active: #18302f;
-  --color-shell-text: #e8eeee;
-  --color-shell-muted: #7d888c;
+  --color-shell: var(--shell);
+  --color-shell-active: var(--shell-active);
+  --color-shell-text: var(--shell-text);
+  --color-shell-muted: var(--shell-muted);
 
-  --color-canvas: #edf3f6;
-  --color-card: #ffffff;
-  --color-ink: #111d27;
-  --color-muted: #69737d;
-  --color-line: #dee5e8;
-  --color-field: #f3f6f8;
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-field: var(--field);
 
-  --color-primary: #1d4943;
-  --color-primary-hover: #214c46;
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
 
-  --color-accent-cyan: #0ea5c6;
-  --color-accent-purple: #7c5cd6;
-  --color-accent-green: #22a06b;
-  --color-accent-amber: #e0a526;
-  --color-accent-orange: #ea7a2e;
-  --color-accent-red: #dc4b4b;
-  --color-accent-slate: #7a8ea3;
-  --color-accent-blue: #3b82f6;
+  --color-accent-cyan: var(--accent-cyan);
+  --color-accent-purple: var(--accent-purple);
+  --color-accent-green: var(--accent-green);
+  --color-accent-amber: var(--accent-amber);
+  --color-accent-orange: var(--accent-orange);
+  --color-accent-red: var(--accent-red);
+  --color-accent-slate: var(--accent-slate);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-pink: var(--accent-pink);
+  --color-accent-teal: var(--accent-teal);
+  --color-accent-brown: var(--accent-brown);
+  --color-accent-gray: var(--accent-gray);
 
   --radius-card: 16px;
-  --shadow-card: 0 1px 2px rgba(17, 29, 39, 0.04);
+  --shadow-card: var(--shadow-card);
 }
 
 body {

@@ -10,6 +10,9 @@ import { EVENT_HEADER, EVENT_ID_HEADER, SIGNATURE_HEADER, verifyZernioSignature 
 export const dynamic = "force-dynamic";
 
 const MAX_BODY_BYTES = 1_000_000;
+// Espera antes de triaje: si el usuario manda varios mensajes en ráfaga, solo el último
+// pasa el check superseded() y procesa la conversación completa.
+const MESSAGE_BATCH_MS = 5_000;
 
 const ok = (body: Record<string, unknown> = { ok: true }) => Response.json(body, { status: 200 });
 
@@ -34,6 +37,9 @@ function scheduleAgent(result: IngestResult | null) {
   if (result?.kind !== "message" || !result.inbound || !result.inserted || !result.messageId) return;
   const { conversationId, messageId } = result;
   after(async () => {
+    // Batch temporal: si el usuario manda varios mensajes en ráfaga, solo el último procesa.
+    // Los anteriores salen con superseded=true en triageIncomingMessage sin gastar un token.
+    await new Promise<void>((r) => setTimeout(r, MESSAGE_BATCH_MS));
     // Import dinámico: el grafo del agente no entra en el cold start del webhook.
     // Triaje: Jev clasifica, el código enruta y GPT redacta. La idempotencia la garantiza
     // el índice único de message_triage sobre message_id, no este bloque.

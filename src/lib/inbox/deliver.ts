@@ -39,6 +39,11 @@ export async function deliverMessage(
     return { ok: false, code: "not_found", error: "Conversación inexistente" };
   }
 
+  // Un expediente delegado es de solo lectura: su cuenta de canal es la de la inmobiliaria de origen.
+  if ((conv.metadata as Record<string, unknown> | null)?.delegation) {
+    return { ok: false, code: "not_found", error: "Este hilo es un expediente delegado: no se puede responder desde acá." };
+  }
+
   const window = computeWindow(conv.channel, conv.lastInboundAt);
 
   // Plantilla de WhatsApp: vale con la ventana abierta o cerrada. Se valida contra Zernio en el servidor.

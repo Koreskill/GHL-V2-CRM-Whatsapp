@@ -5,33 +5,42 @@ import { EmptyState } from "@/components/ui/primitives";
 import { formatListDate } from "@/lib/format";
 import type { ConversationListItem } from "@/lib/inbox/queries";
 import { cn } from "@/lib/utils";
+import type { InboxTab } from "@/lib/inbox/status";
+import type { OpenDelegation } from "@/lib/delegations/flow";
 import { Avatar } from "./avatar";
+import { DelegationList } from "./delegation-list";
 import { InboxAutoRefresh } from "./inbox-auto-refresh";
 
 const CHANNELS: Channel[] = ["whatsapp", "instagram", "facebook"];
 
-export type InboxFilters = { channel?: Channel; q?: string };
+export type InboxFilters = { channel?: Channel; q?: string; tab?: InboxTab };
+
+export type InboxCounts = { desactivas: number; activas: number; delegadas: number; archivadas: number };
 
 export function inboxHref(path: string, f: InboxFilters) {
   const params = new URLSearchParams();
   if (f.channel) params.set("channel", f.channel);
   if (f.q) params.set("q", f.q);
+  if (f.tab && f.tab !== "activas") params.set("tab", f.tab);
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 }
 
 export function ConversationList({
   items,
-  total,
+  counts,
+  delegations,
   filters,
   activeId,
 }: {
   items: ConversationListItem[];
-  total: number;
+  counts: InboxCounts;
+  delegations: OpenDelegation[];
   filters: InboxFilters;
   activeId?: string;
 }) {
   const filtered = Boolean(filters.channel || filters.q);
+  const tab: InboxTab = filters.tab ?? "activas";
 
   return (
     <section className="flex w-[360px] shrink-0 flex-col border-r border-line bg-card">
@@ -39,10 +48,32 @@ export function ConversationList({
       <div className="border-b border-line p-5">
         <div className="flex items-center gap-2">
           <h1 className="text-[18px] font-semibold text-ink">Conversaciones</h1>
-          <span className="rounded-md bg-field px-1.5 py-0.5 text-[11px] font-medium text-muted">{total}</span>
+        </div>
+
+        <div role="tablist" aria-label="Estado" className="mt-3 flex gap-1 rounded-xl bg-field p-0.5">
+          {([
+            ["desactivas", "Desactivas"],
+            ["activas", "Activas"],
+            ["delegadas", "Delegadas"],
+          ] as const).map(([id, label]) => (
+            <Link
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              href={inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: id })}
+              className={cn(
+                "flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium transition-colors",
+                tab === id ? "bg-card text-ink shadow-card" : "text-muted hover:text-ink",
+              )}
+            >
+              {label}
+              <span className={cn("rounded-md px-1 text-[11px]", id === "delegadas" && counts.delegadas > 0 ? "bg-primary text-white" : "bg-line/60 text-muted")}>{counts[id]}</span>
+            </Link>
+          ))}
         </div>
 
         <form action="/conversaciones" className="mt-4">
+          <input type="hidden" name="tab" value={tab} />
           {filters.channel && <input type="hidden" name="channel" value={filters.channel} />}
           <label className="flex h-9 items-center gap-2 rounded-lg bg-field px-3 text-muted">
             <Search className="size-4" strokeWidth={1.8} />
@@ -57,14 +88,14 @@ export function ConversationList({
         </form>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <Chip href={inboxHref("/conversaciones", { q: filters.q })} active={!filters.channel}>
+          <Chip href={inboxHref("/conversaciones", { q: filters.q, tab })} active={!filters.channel}>
             Todos
           </Chip>
           {CHANNELS.map((c) => {
             const { label, Icon, color } = CHANNEL_META[c];
             const active = filters.channel === c;
             return (
-              <Chip key={c} href={inboxHref("/conversaciones", { channel: c, q: filters.q })} active={active}>
+              <Chip key={c} href={inboxHref("/conversaciones", { channel: c, q: filters.q, tab })} active={active}>
                 <Icon className={cn("size-3.5", active ? "text-white" : color)} />
                 {label}
               </Chip>
@@ -74,14 +105,16 @@ export function ConversationList({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {items.length === 0 ? (
+        {tab === "delegadas" ? (
+          <DelegationList items={delegations} />
+        ) : items.length === 0 ? (
           filtered ? (
             <EmptyState icon={Search} title="Sin resultados" description="Ninguna conversación coincide con el filtro." />
           ) : (
             <EmptyState
               icon={MessageCircle}
-              title="Aun no hay conversaciones."
-              description="Cuando alguien te escriba por WhatsApp, Instagram o Messenger, va a aparecer acá."
+              title={tab === "desactivas" ? "Sin conversaciones desactivadas" : tab === "archivadas" ? "Sin conversaciones archivadas" : "Aun no hay conversaciones."}
+              description={tab === "activas" ? "Cuando alguien te escriba por WhatsApp, Instagram o Messenger, va a aparecer acá." : "Acá aparecen las que muevas a este estado."}
             />
           )
         ) : (
@@ -121,6 +154,13 @@ export function ConversationList({
           </ul>
         )}
       </div>
+      {tab !== "delegadas" && (
+        <div className="border-t border-line px-5 py-2 text-[12px] text-muted">
+          <Link href={inboxHref("/conversaciones", { tab: tab === "archivadas" ? "activas" : "archivadas" })} className="hover:text-ink hover:underline">
+            {tab === "archivadas" ? "Volver a las activas" : `Ver archivadas (${counts.archivadas})`}
+          </Link>
+        </div>
+      )}
     </section>
   );
 }

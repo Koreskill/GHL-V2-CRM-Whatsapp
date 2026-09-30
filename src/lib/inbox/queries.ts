@@ -14,11 +14,16 @@ export type ConversationListItem = {
   unreadCount: number;
   preview: string | null;
   previewDirection: "inbound" | "outbound" | null;
+  status: string;
 };
 
-export async function listConversations(orgId: string, filters: { channel?: Channel; q?: string; limit?: number }) {
+export async function listConversations(orgId: string, filters: { channel?: Channel; q?: string; limit?: number; tab?: "desactivas" | "activas" | "delegadas" | "archivadas" }) {
   const db = getDb();
   const where: SQL[] = [eq(conversations.organizationId, orgId)];
+  // La pestaña es el estado operativo del hilo. "Delegadas" no lista conversaciones propias: son solicitudes de la red.
+  if (filters.tab === "desactivas") where.push(eq(conversations.status, "desactiva"));
+  else if (filters.tab === "archivadas") where.push(eq(conversations.status, "archivada"));
+  else where.push(eq(conversations.status, "activa"));
   if (filters.channel) where.push(eq(conversations.channel, filters.channel));
   const q = filters.q?.trim();
   if (q) {
@@ -53,6 +58,7 @@ export async function listConversations(orgId: string, filters: { channel?: Chan
       contactPhone: contacts.phone,
       lastMessageAt: conversations.lastMessageAt,
       unreadCount: conversations.unreadCount,
+      status: conversations.status,
       preview: sql<string | null>`last.body`,
       previewDirection: sql<"inbound" | "outbound" | null>`last.direction`,
     })
@@ -72,6 +78,7 @@ export async function listConversations(orgId: string, filters: { channel?: Chan
     picture: r.participantPicture,
     lastMessageAt: r.lastMessageAt?.toISOString() ?? null,
     unreadCount: r.unreadCount,
+    status: r.status,
     preview: r.preview,
     previewDirection: r.previewDirection,
   }));
@@ -87,6 +94,8 @@ export async function countConversations(orgId: string) {
 
 export type ConversationDetail = ConversationListItem & {
   contactId: string | null;
+  /** Nombre de la inmobiliaria de origen si es un expediente delegado (solo lectura). */
+  delegatedFrom: string | null;
   aiEnabled: boolean;
   window: MessagingWindow;
 };
@@ -109,9 +118,11 @@ export async function getConversation(id: string, orgId: string): Promise<Conver
     picture: c.participantPicture,
     lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
     unreadCount: c.unreadCount,
+    status: c.status,
     preview: null,
     previewDirection: null,
     contactId: c.contactId,
+    delegatedFrom: ((c.metadata as Record<string, { fromOrganization?: string } | undefined>)?.delegation?.fromOrganization as string | undefined) ?? null,
     aiEnabled: c.aiEnabled,
     window: computeWindow(c.channel, c.lastInboundAt),
   };

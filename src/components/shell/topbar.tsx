@@ -1,4 +1,5 @@
 import { Search } from "lucide-react";
+import { ThemeToggle } from "./theme-toggle";
 import { HandoverBell, type HandoverItem } from "./handover-bell";
 
 export function Topbar({ handovers }: { handovers: HandoverItem[] }) {
@@ -15,7 +16,10 @@ export function Topbar({ handovers }: { handovers: HandoverItem[] }) {
           ⌘ K
         </kbd>
       </label>
-      <HandoverBell items={handovers} />
+      <div className="ml-auto flex items-center gap-3">
+        <ThemeToggle />
+        <HandoverBell items={handovers} />
+      </div>
     </header>
   );
 }

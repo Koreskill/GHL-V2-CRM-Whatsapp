@@ -7,6 +7,9 @@ import { getDb } from "@/db";
 import { deals, visitEvents, visits } from "@/db/schema";
 import { isUuid } from "@/lib/api";
 import { authorizeAction } from "@/lib/deals/guard";
+import { syncVisit } from "@/lib/calendar/sync";
+import { wallTimeToDate } from "@/lib/tz";
+import { after } from "next/server";
 
 const text = (form: FormData, key: string, max = 500) => String(form.get(key) ?? "").trim().slice(0, max);
 
@@ -17,9 +20,7 @@ function fail(path: string, motivo: string): never {
 // El input datetime-local manda "2026-09-30T15:30" sin zona: se interpreta como hora local del
 // servidor. Se valida que sea una fecha real antes de guardarla.
 function parseWhen(raw: string): Date | null {
-  if (!raw) return null;
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? null : d;
+  return raw ? wallTimeToDate(raw) : null;
 }
 
 async function logEvent(input: {
@@ -84,6 +85,11 @@ export async function requestVisit(formData: FormData) {
     action: scheduledAt ? "agendada" : "solicitada",
     to: scheduledAt?.toISOString() ?? null,
   });
+  if (scheduledAt) {
+    after(async () => {
+      await syncVisit(orgId, created.id);
+    });
+  }
 
   revalidatePath("/visitas");
   revalidatePath(`/pipeline/${dealId}`);
@@ -120,6 +126,12 @@ export async function scheduleVisit(formData: FormData) {
     action: current.scheduledAt ? "reprogramada" : "agendada",
     from: current.scheduledAt?.toISOString() ?? null,
     to: scheduledAt.toISOString(),
+  });
+
+  // Reserva en el Cal.com de ESTA inmobiliaria, después de responder. Si falla, la visita queda
+  // igual y el error se ve (y se reintenta) en Calendario.
+  after(async () => {
+    await syncVisit(orgId, visitId);
   });
 
   revalidatePath("/visitas");
@@ -191,6 +203,9 @@ export async function cancelVisit(formData: FormData) {
     action: "cancelada",
     from: current.status,
     to: reason,
+  });
+  after(async () => {
+    await syncVisit(orgId, visitId);
   });
 
   revalidatePath("/visitas");

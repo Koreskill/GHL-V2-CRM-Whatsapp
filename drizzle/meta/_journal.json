@@ -92,6 +92,34 @@
       "when": 1790291448108,
       "tag": "0012_contact_tags_and_interest",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790801558615,
+      "tag": "0013_ficha_publica",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790801861923,
+      "tag": "0014_contactos_vistas_campanas",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790802176455,
+      "tag": "0015_estados_y_delegacion",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790802413545,
+      "tag": "0016_calendario_por_organizacion",
+      "breakpoints": true
     }
   ]
 }

@@ -4,17 +4,27 @@ import { eq } from "drizzle-orm";
 import { Bot, CheckCircle2, Link2, Settings2 } from "lucide-react";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { AccountsPanel } from "@/components/settings/accounts-panel";
+import { headers } from "next/headers";
+import { CalendarForm } from "@/components/settings/calendar-form";
+import { getIntegration, webhookSecretOf } from "@/lib/calendar/integration";
+import { encryptionConfigured } from "@/lib/crypto/secrets";
+import { originFromHeaders } from "@/lib/request-origin";
+import { BrandingForm } from "@/components/settings/branding-form";
+import { getOrgBranding } from "@/lib/publications/queries";
+import { PipelineColorsForm } from "@/components/settings/pipeline-colors-form";
+import { getOrganization } from "@/lib/agency/queries";
+import { resolveStageColors } from "@/lib/pipeline-colors";
 import { Button, Card, PageHeader } from "@/components/ui/primitives";
 import { getDb } from "@/db";
 import { agentConfigs, channelAccounts } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
 import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "@/lib/agent/config";
 import { cn } from "@/lib/utils";
-import { saveAgentConfig } from "./actions";
+import { saveAgentConfig, savePipelineColors } from "./actions";
 
 type AgentTab = "global" | Channel;
-type Tab = "cuentas" | AgentTab;
-const TABS: Tab[] = ["cuentas", "whatsapp", "instagram", "facebook", "global"];
+type Tab = "cuentas" | "pipeline" | "marca" | "calendario" | AgentTab;
+const TABS: Tab[] = ["cuentas", "whatsapp", "instagram", "facebook", "global", "pipeline", "marca", "calendario"];
 
 export default async function ConfiguracionPage({ searchParams }: PageProps<"/configuracion">) {
   // Solo administradores: la validación es del servidor, no solo ocultar el link del menú.
@@ -34,7 +44,7 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
       {TABS.map((t) => {
         const active = t === tab;
         const on = rows.find((r) => r.scope === t)?.enabled;
-        const meta = t === "global" || t === "cuentas" ? null : CHANNEL_META[t];
+        const meta = t === "global" || t === "cuentas" || t === "pipeline" || t === "marca" || t === "calendario" ? null : CHANNEL_META[t];
         const TabIcon = t === "cuentas" ? Link2 : Settings2;
         return (
           <Link
@@ -46,13 +56,75 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
             )}
           >
             {meta ? <meta.Icon className={cn("size-4", active ? "text-white" : meta.color)} /> : <TabIcon className="size-4" strokeWidth={1.7} />}
-            {meta ? `Agente ${meta.label}` : t === "cuentas" ? "Cuentas" : "Agente general"}
+            {meta ? `Agente ${meta.label}` : t === "cuentas" ? "Cuentas" : t === "pipeline" ? "Pipeline" : t === "marca" ? "Marca" : t === "calendario" ? "Calendario" : "Agente general"}
             {meta && <span className={cn("size-1.5 rounded-full", on ? "bg-accent-green" : "bg-muted/40")} />}
           </Link>
         );
       })}
     </div>
   );
+
+  if (tab === "calendario") {
+    const integration = await getIntegration(orgId);
+    const origin = originFromHeaders(await headers());
+    return (
+      <>
+        <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />
+        {tabs}
+        <Card className="p-6">
+          <p className="text-[15px] font-semibold text-ink">Calendario de visitas (Cal.com)</p>
+          <p className="mb-5 text-[13px] text-muted">
+            Cada inmobiliaria conecta su propia cuenta: las visitas que agendes se reservan ahí y nadie más ve tus reservas.
+            {params.saved === "1" && <span className="ml-2 font-medium text-accent-green">Guardado.</span>}
+            {params.tested === "1" && <span className="ml-2 font-medium text-accent-green">Conexión correcta.</span>}
+            {params.disconnected === "1" && <span className="ml-2 font-medium text-accent-green">Desconectado.</span>}
+          </p>
+          {typeof params.error === "string" && <p className="mb-4 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{params.error}</p>}
+          <CalendarForm
+            integration={integration}
+            webhookUrl={integration ? `${origin}/api/webhooks/calcom/${integration.id}` : null}
+            webhookSecret={integration ? webhookSecretOf(integration) : null}
+            encryptionOk={encryptionConfigured()}
+          />
+        </Card>
+      </>
+    );
+  }
+
+  if (tab === "marca") {
+    return (
+      <>
+        <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />
+        {tabs}
+        <Card className="p-6">
+          <p className="text-[15px] font-semibold text-ink">Marca y contacto</p>
+          <p className="mb-5 text-[13px] text-muted">
+            Se usa en las fichas públicas de tus propiedades. El WhatsApp de contacto es obligatorio para poder publicar.
+            {saved && <span className="ml-2 font-medium text-accent-green">Guardado.</span>}
+          </p>
+          <BrandingForm branding={await getOrgBranding(orgId)} />
+        </Card>
+      </>
+    );
+  }
+
+  if (tab === "pipeline") {
+    const org = await getOrganization(orgId);
+    return (
+      <>
+        <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />
+        {tabs}
+        <Card className="p-6">
+          <p className="text-[15px] font-semibold text-ink">Colores del pipeline</p>
+          <p className="mb-5 text-[13px] text-muted">
+            Cada columna usa el color que elijas. Solo cambia cómo se ve: las etapas y su orden son los mismos para todas las inmobiliarias.
+            {saved && <span className="ml-2 font-medium text-accent-green">Guardado.</span>}
+          </p>
+          <PipelineColorsForm initial={resolveStageColors(org?.metadata)} action={savePipelineColors} />
+        </Card>
+      </>
+    );
+  }
 
   if (tab === "cuentas") {
     const accounts = await db

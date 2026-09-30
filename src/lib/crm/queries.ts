@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import type { Channel } from "@/db/schema";
+import { contactWhere, type ContactFilters } from "./contact-filters";
 
 const TZ = "America/Argentina/Buenos_Aires";
 
@@ -17,10 +18,7 @@ export type ContactRow = {
   createdAt: string;
 };
 
-export async function listContacts(orgId: string, filters: { q?: string; channel?: Channel; limit?: number }) {
-  const q = filters.q?.trim();
-  const like = q ? `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%` : null;
-
+export async function listContacts(orgId: string, filters: ContactFilters & { limit?: number; offset?: number }) {
   const rows = await getDb().execute<{
     id: string;
     name: string | null;
@@ -41,16 +39,9 @@ export async function listContacts(orgId: string, filters: { q?: string; channel
       (select coalesce(cv.participant_name, cv.participant_handle) from conversations cv
          where cv.contact_id = c.id order by cv.last_message_at desc nulls last limit 1) as fallback_name
     from contacts c
-    where c.organization_id = ${orgId}
-      and (${like}::text is null
-           or c.name ilike ${like} or c.phone ilike ${like} or c.email ilike ${like}
-           or exists (select 1 from contact_identities ci where ci.contact_id = c.id and ci.handle ilike ${like})
-           or exists (select 1 from conversations cv where cv.contact_id = c.id
-                      and (cv.participant_name ilike ${like} or cv.participant_handle ilike ${like})))
-      and (${filters.channel ?? null}::channel is null
-           or exists (select 1 from contact_identities ci where ci.contact_id = c.id and ci.channel = ${filters.channel ?? null}::channel))
+    where ${contactWhere(orgId, filters)}
     order by last_message_at desc nulls last, c.created_at desc
-    limit ${filters.limit ?? 200}
+    limit ${filters.limit ?? 200} offset ${filters.offset ?? 0}
   `);
 
   return rows.map<ContactRow>((r) => {
@@ -69,8 +60,8 @@ export async function listContacts(orgId: string, filters: { q?: string; channel
   });
 }
 
-export async function countContacts(orgId: string) {
-  const [row] = await getDb().execute<{ n: number }>(sql`select count(*)::int as n from contacts where organization_id = ${orgId}`);
+export async function countContacts(orgId: string, filters: ContactFilters = {}) {
+  const [row] = await getDb().execute<{ n: number }>(sql`select count(*)::int as n from contacts c where ${contactWhere(orgId, filters)}`);
   return row.n;
 }
 

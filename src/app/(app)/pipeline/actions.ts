@@ -88,40 +88,55 @@ export async function createDeal(formData: FormData) {
   redirect(`/pipeline/${created.id}`);
 }
 
-// Mover entre etapas. Primera implementación por selector: el drag-and-drop se agrega después
-// de comprobar que los cambios se guardan bien.
-export async function moveDealStage(formData: FormData) {
-  const { session, orgId } = await authorizeAction();
-  const dealId = text(formData, "dealId", 64);
-  const stageRaw = text(formData, "stage", 32);
-  if (!isUuid(dealId) || !STAGES.has(stageRaw)) redirect("/pipeline");
-  const stage = stageRaw as DealStage;
+export type MoveResult = { ok: true; changed: boolean } | { ok: false; error: string };
 
+// Un solo camino para mover de etapa: lo usan el selector (formulario) y el arrastre (tablero).
+// La organización sale de la sesión; un id de otra inmobiliaria simplemente no se encuentra.
+async function applyStageMove(orgId: string, actorUserId: string, dealId: string, stage: DealStage): Promise<MoveResult> {
   const db = getDb();
   const [current] = await db
     .select({ stage: deals.stage, status: deals.status })
     .from(deals)
     .where(and(eq(deals.id, dealId), eq(deals.organizationId, orgId)));
-  if (!current) redirect("/pipeline");
-  if (current.stage === stage && current.status === "abierta") redirect("/pipeline");
+  if (!current) return { ok: false, error: "No se encontró la oportunidad." };
+  // Mismo destino y ya abierta: no hay nada que escribir (un doble drop no duplica el evento).
+  if (current.stage === stage && current.status === "abierta") return { ok: true, changed: false };
 
   // Mover una oportunidad cerrada la reabre: el tablero solo muestra las abiertas.
-  await db
+  // La condición sobre la etapa de origen hace que dos movimientos simultáneos no escriban dos eventos.
+  const updated = await db
     .update(deals)
     .set({ stage, status: "abierta", lostReason: null, closedAt: null })
-    .where(and(eq(deals.id, dealId), eq(deals.organizationId, orgId)));
+    .where(and(eq(deals.id, dealId), eq(deals.organizationId, orgId), eq(deals.stage, current.stage), eq(deals.status, current.status)))
+    .returning({ id: deals.id });
+  if (!updated.length) return { ok: true, changed: false };
 
-  await logEvent({
-    orgId,
-    dealId,
-    actorUserId: session.user.id,
-    action: "etapa",
-    from: current.stage,
-    to: stage,
-  });
+  await logEvent({ orgId, dealId, actorUserId, action: "etapa", from: current.stage, to: stage });
   revalidatePath("/pipeline");
-  revalidatePath(`/pipeline/${dealId}`);
+  revalidatePath("/pipeline/" + dealId);
+  return { ok: true, changed: true };
+}
+
+// Mover entre etapas por selector (teclado y teléfono).
+export async function moveDealStage(formData: FormData) {
+  const { session, orgId } = await authorizeAction();
+  const dealId = text(formData, "dealId", 64);
+  const stageRaw = text(formData, "stage", 32);
+  if (!isUuid(dealId) || !STAGES.has(stageRaw)) redirect("/pipeline");
+  await applyStageMove(orgId, session.user.id, dealId, stageRaw as DealStage);
   redirect("/pipeline");
+}
+
+// Mover entre etapas arrastrando. Devuelve el resultado en vez de redirigir: si falla, el tablero
+// devuelve la tarjeta a su columna. Soltar en "Cerrado ganado" cambia solo la etapa, igual que el
+// selector; cerrar como ganada o perdida sigue siendo una acción aparte con su motivo.
+export async function moveDealStageAction(dealId: string, stage: string): Promise<MoveResult> {
+  const { session, orgId } = await authorizeAction();
+  if (!isUuid(dealId) || !STAGES.has(stage)) return { ok: false, error: "Movimiento inválido." };
+  return applyStageMove(orgId, session.user.id, dealId, stage as DealStage).catch(() => ({
+    ok: false as const,
+    error: "No se pudo guardar el cambio.",
+  }));
 }
 
 // Cerrar: ganada o perdida. Perder NO obliga a pasar por "Cerrado ganado": la etapa en la que

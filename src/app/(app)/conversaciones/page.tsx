@@ -3,17 +3,19 @@ import { ConversationList } from "@/components/inbox/conversation-list";
 import { parseInboxFilters } from "@/components/inbox/filters";
 import { EmptyState } from "@/components/ui/primitives";
 import { requireOrgId } from "@/lib/auth";
-import { countConversations, listConversations } from "@/lib/inbox/queries";
+import { loadInboxSidebar } from "@/lib/inbox/sidebar";
 
 export default async function ConversacionesPage({ searchParams }: PageProps<"/conversaciones">) {
   const orgId = await requireOrgId();
   const filters = parseInboxFilters(await searchParams);
-  const [items, total] = await Promise.all([listConversations(orgId, filters), countConversations(orgId)]);
+  const { items, counts, delegations } = await loadInboxSidebar(orgId, filters);
+  const error = typeof (await searchParams).error === "string" ? String((await searchParams).error) : null;
 
   return (
     <div className="-mx-9 -my-8 flex h-[calc(100%+4rem)]">
-      <ConversationList items={items} total={total} filters={filters} />
+      <ConversationList items={items} counts={counts} delegations={delegations} filters={filters} />
       <section className="grid flex-1 place-items-center p-8">
+        {error && <p role="alert" className="absolute top-20 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</p>}
         <EmptyState
           icon={MessageCircle}
           title="Selecciona una conversación"

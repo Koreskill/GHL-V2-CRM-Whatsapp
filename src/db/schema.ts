@@ -271,6 +271,10 @@ export const conversations = pgTable(
     lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
     unreadCount: integer("unread_count").notNull().default(0),
     aiEnabled: boolean("ai_enabled").notNull().default(true),
+    // Estado OPERATIVO del hilo, independiente de ai_enabled (que solo apaga al bot), de la ventana
+    // de mensajería y de unread_count. activa | desactiva | archivada (archivar oculta, no borra).
+    status: text("status").notNull().default("activa"),
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }),
     // ── Indicador "escribiendo…" (Fase 11) ──
     // Estado efímero de la conversación, NO un mensaje: nunca entra al historial.
     // Zernio no expone typing/presence, así que esto se ve SOLO dentro del CRM; la persona
@@ -291,6 +295,7 @@ export const conversations = pgTable(
     index("conversations_channel_idx").on(t.channel),
     index("conversations_contact_id_idx").on(t.contactId),
     index("conversations_org_idx").on(t.organizationId),
+    index("conversations_org_status_idx").on(t.organizationId, t.status, t.lastMessageAt),
   ],
 );
 
@@ -933,3 +938,244 @@ export type LeadTemperature = (typeof leadTemperatureEnum.enumValues)[number];
 export type ProspectUrgency = (typeof urgencyEnum.enumValues)[number];
 export type PaymentMethod = (typeof paymentMethodEnum.enumValues)[number];
 export type OperationType = (typeof operationTypeEnum.enumValues)[number];
+
+// ─── Ficha pública de una propiedad (Entrega C) ─────────────────────────────
+// La decisión editorial de publicar vive ACÁ y no en properties: la sincronización con la hoja
+// reescribe properties, y no puede despublicar ni cambiar lo que alguien decidió mostrar.
+// El slug es un token aleatorio independiente del id interno: el link público no revela ni permite adivinar ids.
+export const publicationStatusEnum = pgEnum("publication_status", ["borrador", "publicada", "pausada"]);
+
+export const propertyPublications = pgTable(
+  "property_publications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    propertyId: uuid("property_id")
+      .notNull()
+      .references(() => properties.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    status: publicationStatusEnum("status").notNull().default("borrador"),
+    // Titular editorial opcional: si está vacío se usa el de la propiedad.
+    headline: text("headline"),
+    // La dirección exacta solo sale si alguien lo autorizó; aun así es addressPublic, nunca addressFull.
+    showAddress: boolean("show_address").notNull().default(false),
+    // Marca: cowin (identidad de la red) o la de la inmobiliaria.
+    brand: text("brand").notNull().default("cowin"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    views: integer("views").notNull().default(0),
+    ctaClicks: integer("cta_clicks").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("property_publications_slug_key").on(t.slug),
+    uniqueIndex("property_publications_property_key").on(t.propertyId),
+    index("property_publications_org_idx").on(t.organizationId, t.status),
+  ],
+);
+
+// ─── Contactos: vistas guardadas y campañas (Entrega D) ─────────────────────
+// Una vista es un nombre + los mismos filtros de la URL. `shared` la hace visible a toda la inmobiliaria.
+export const contactViews = pgTable(
+  "contact_views",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    // auth.users vive en otro esquema: sin FK, como assigned_user_id.
+    ownerUserId: uuid("owner_user_id").notNull(),
+    name: text("name").notNull(),
+    filters: jsonb("filters").$type<Record<string, string>>().notNull().default({}),
+    shared: boolean("shared").notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [index("contact_views_org_idx").on(t.organizationId, t.ownerUserId)],
+);
+
+// Un lote de campaña. Estimar NO es enviar: 'estimada' solo calcula. Enviar exige confirmar un lote
+// con la audiencia CONGELADA (campaign_recipients), y el envío real además requiere CAMPAIGNS_SEND_ENABLED.
+export const campaignBatches = pgTable(
+  "campaign_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").notNull(),
+    name: text("name").notNull(),
+    channel: channelEnum("channel").notNull().default("whatsapp"),
+    templateName: text("template_name").notNull(),
+    templateLanguage: text("template_language").notNull(),
+    // Variables de la plantilla; admite {nombre}, que se reemplaza por el primer nombre de cada contacto.
+    params: jsonb("params").$type<string[]>().notNull().default([]),
+    filters: jsonb("filters").$type<Record<string, string>>().notNull().default({}),
+    // estimada | confirmada | enviando | completada | cancelada
+    status: text("status").notNull().default("estimada"),
+    audienceCount: integer("audience_count").notNull().default(0),
+    excluded: jsonb("excluded").$type<Record<string, number>>().notNull().default({}),
+    // Costo: todo queda guardado para poder explicar el total (no es un precio universal).
+    currency: text("currency").notNull().default("USD"),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 4 }).notNull().default("0"),
+    taxPct: numeric("tax_pct", { precision: 6, scale: 2 }).notNull().default("0"),
+    surchargePct: numeric("surcharge_pct", { precision: 6, scale: 2 }).notNull().default("0"),
+    rateSource: text("rate_source").notNull().default("manual"),
+    rateDate: timestamp("rate_date", { withTimezone: true }),
+    estimatedTotal: numeric("estimated_total", { precision: 14, scale: 2 }).notNull().default("0"),
+    sentCount: integer("sent_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    confirmedBy: uuid("confirmed_by"),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index("campaign_batches_org_idx").on(t.organizationId, t.createdAt)],
+);
+
+export const campaignRecipients = pgTable(
+  "campaign_recipients",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => campaignBatches.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    // pendiente | enviando | enviado | fallido
+    status: text("status").notNull().default("pendiente"),
+    messageId: uuid("message_id").references(() => messages.id, { onDelete: "set null" }),
+    error: text("error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    // Un contacto entra una sola vez por lote: un reintento no lo duplica.
+    uniqueIndex("campaign_recipients_batch_contact_key").on(t.batchId, t.contactId),
+    index("campaign_recipients_batch_status_idx").on(t.batchId, t.status),
+  ],
+);
+
+// ─── Estados del inbox y delegación en la red (Entrega E) ───────────────────
+// Historial append-only de cambios de estado de una conversación.
+export const conversationEvents = pgTable(
+  "conversation_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    actorUserId: uuid("actor_user_id"),
+    action: text("action").notNull(), // estado | delegada | tomada | cancelada
+    fromValue: text("from_value"),
+    toValue: text("to_value"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("conversation_events_conv_idx").on(t.conversationId, t.createdAt)],
+);
+
+// Una conversación NO cambia de organización: sus mensajes, identidades y cuentas están anclados al
+// tenant y al proveedor de origen. Delegar crea una SOLICITUD; al tomarla, la inmobiliaria receptora
+// recibe un expediente propio (un hilo de solo lectura con lo que el origen autorizó compartir).
+export const conversationDelegations = pgTable(
+  "conversation_delegations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    networkId: uuid("network_id")
+      .notNull()
+      .references(() => networks.id, { onDelete: "cascade" }),
+    sourceOrganizationId: uuid("source_organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    sourceConversationId: uuid("source_conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    // Null = abierta a cualquier inmobiliaria activa de la red.
+    targetOrganizationId: uuid("target_organization_id").references(() => organizations.id, { onDelete: "cascade" }),
+    // pendiente | tomada | rechazada | cancelada
+    status: text("status").notNull().default("pendiente"),
+    note: text("note"),
+    // Consentimiento: qué datos viajan. Se guarda para auditar qué se compartió.
+    scope: jsonb("scope").$type<{ history: boolean; phone: boolean }>().notNull().default({ history: false, phone: false }),
+    // Lo único visible ANTES de tomarla: sin mensajes ni datos de contacto.
+    summary: jsonb("summary").$type<Record<string, unknown>>().notNull().default({}),
+    createdBy: uuid("created_by"),
+    takenByOrganizationId: uuid("taken_by_organization_id").references(() => organizations.id, { onDelete: "set null" }),
+    takenByUserId: uuid("taken_by_user_id"),
+    takenAt: timestamp("taken_at", { withTimezone: true }),
+    // El expediente que se le creó a la receptora.
+    takenConversationId: uuid("taken_conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    index("conversation_delegations_network_status_idx").on(t.networkId, t.status),
+    index("conversation_delegations_source_idx").on(t.sourceOrganizationId, t.sourceConversationId),
+    // A lo sumo UNA solicitud viva por conversación de origen.
+    uniqueIndex("conversation_delegations_one_open_key").on(t.sourceConversationId).where(sql`${t.status} = 'pendiente'`),
+  ],
+);
+
+// ─── Calendario por inmobiliaria (Entrega F) ────────────────────────────────
+// Cada organización conecta SU propia cuenta de Cal.com. Los secretos se guardan cifrados
+// (AES-256-GCM, clave del servidor): nunca en claro ni en metadata libre ni en el cliente.
+export const calendarIntegrations = pgTable(
+  "calendar_integrations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull().default("calcom"),
+    apiKeyEnc: text("api_key_enc").notNull(),
+    // Secreto con el que Cal.com firma los webhooks de ESTA inmobiliaria.
+    webhookSecretEnc: text("webhook_secret_enc").notNull(),
+    eventTypeId: integer("event_type_id").notNull(),
+    bookingUrl: text("booking_url"),
+    timeZone: text("time_zone").notNull().default("America/Argentina/Buenos_Aires"),
+    // Cal.com exige email del asistente; si el contacto no tiene, se usa este (nunca uno inventado).
+    fallbackEmail: text("fallback_email"),
+    // conectada | error | desconectada
+    status: text("status").notNull().default("conectada"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("calendar_integrations_org_key").on(t.organizationId)],
+);
+
+// Vínculo visita <-> reserva remota. Único por visita y por (organización, uid): reintentar no duplica.
+export const visitBookings = pgTable(
+  "visit_bookings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    visitId: uuid("visit_id")
+      .notNull()
+      .references(() => visits.id, { onDelete: "cascade" }),
+    // Null hasta que Cal.com confirma la creación. Reprogramar en Cal.com devuelve un uid nuevo.
+    bookingUid: text("booking_uid"),
+    startAt: timestamp("start_at", { withTimezone: true }),
+    // pendiente | sincronizada | error | cancelada
+    syncStatus: text("sync_status").notNull().default("pendiente"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("visit_bookings_visit_key").on(t.visitId),
+    uniqueIndex("visit_bookings_org_uid_key").on(t.organizationId, t.bookingUid).where(sql`${t.bookingUid} is not null`),
+    index("visit_bookings_org_status_idx").on(t.organizationId, t.syncStatus),
+  ],
+);

@@ -1,10 +1,12 @@
 "use server";
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { agentConfigs } from "@/db/schema";
+import { agentConfigs, organizations } from "@/db/schema";
+import { DEAL_STAGES } from "@/lib/pipeline";
+import { isPresetId } from "@/lib/pipeline-colors";
 import { TOOL_NAMES } from "@/lib/agent/tools";
 import { requireRole } from "@/lib/auth";
 
@@ -74,4 +76,25 @@ export async function saveAgentConfig(formData: FormData) {
 
   revalidatePath("/configuracion");
   redirect(`/configuracion?tab=${scope}&saved=1`);
+}
+
+// Colores de las columnas del pipeline: una preferencia de la inmobiliaria, guardada en
+// organizations.metadata. Solo se aceptan ids de la paleta; el orden y los ids de las etapas no cambian.
+export async function savePipelineColors(formData: FormData) {
+  const session = await requireRole("admin");
+  if (!session) redirect("/");
+
+  const colors: Record<string, string> = {};
+  for (const stage of DEAL_STAGES) {
+    const value = formData.get(`color_${stage.id}`);
+    if (isPresetId(value)) colors[stage.id] = value;
+  }
+
+  await getDb()
+    .update(organizations)
+    .set({ metadata: sql`coalesce(${organizations.metadata}, '{}'::jsonb) || ${JSON.stringify({ pipelineColors: colors })}::jsonb`, updatedAt: sql`now()` })
+    .where(eq(organizations.id, session.organizationId));
+
+  revalidatePath("/pipeline");
+  redirect("/configuracion?tab=pipeline&saved=1");
 }

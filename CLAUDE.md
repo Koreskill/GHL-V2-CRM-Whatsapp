@@ -238,6 +238,16 @@ En la cartera real **las 40 propiedades** tenían el enlace a la publicación y 
 - `npm run eval` → conversaciones completas contra los modelos y el catálogo **reales**, en una transacción que se revierte. No manda WhatsApp. Cuesta centavos; no está en `npm test`. Cada turno se audita contra el catálogo. `npm run eval -- <escenario>` corre uno solo.
 - Que el eval pase **no alcanza**: leer las transcripciones. Cada ronda de lectura encontró algo que ningún chequeo veía todavía.
 
+## Evolución del CRM (plan en docs/plan-accion-crm-claude.md)
+
+Migraciones **0013 a 0016: hay que aplicarlas (rol dueño) ANTES de desplegar**. Sin ellas `conversations.status` no existe y se rompe toda consulta de conversaciones.
+
+- **Tema y pipeline (A/B):** colores como variables en `globals.css` (`:root` / `:root.dark`); el tema vive en `localStorage` con un script previo al pintado. Colores de columnas por inmobiliaria en `organizations.metadata.pipelineColors` (solo ids de la paleta, nunca CSS libre). El tablero arrastra con `moveDealStageAction`; selector y arrastre comparten `applyStageMove`. Soltar en "Cerrado ganado" cambia solo la etapa; cerrar ganada/perdida es aparte.
+- **Ficha pública (C):** `property_publications` separa la decisión editorial de `properties` (la hoja no la pisa). Ruta pública `/p/[slug]` (slug aleatorio, no el id). Solo campos comerciales; `address_full`, notas y documentos no salen nunca. Publicar se revalida en el servidor (`publishBlockers`). Marca y contacto en `organizations.metadata.branding`.
+- **Contactos (D):** `contact-filters.ts` es la ÚNICA definición de los filtros (listado, conteo, vistas y campañas). Cada relación va en EXISTS, con `organization_id` en la subconsulta: sin duplicados. Presupuesto del prospecto ≠ presupuesto de campaña. Campañas: estimar NO envía; confirmar congela la audiencia (`campaign_recipients`); el envío real exige `CAMPAIGNS_SEND_ENABLED=true` y sale por `deliverMessage`.
+- **Inbox (E):** `conversations.status` (activa | desactiva | archivada) es un eje aparte de `ai_enabled`. Archivar oculta, no borra. Delegar NO cambia `organization_id`: crea una solicitud; tomarla es atómica y le crea a la receptora un expediente de solo lectura (`metadata.delegation`), sin poder responder por el canal del origen (`deliverMessage` lo rechaza).
+- **Calendario (F):** Cal.com por inmobiliaria (`calendar_integrations`, clave cifrada AES-256-GCM con `INTEGRATIONS_ENCRYPTION_KEY`). `visit_bookings` une visita y reserva (único por visita y por uid). Reprogramar en Cal.com devuelve un uid NUEVO. Webhook `/api/webhooks/calcom/[integrationId]` firmado con el secreto de esa organización; barrido `/api/cron/calendar`. Las variables globales `CALCOM_*` solo valen para `CALCOM_LEGACY_ORG_ID`. Las horas de los formularios se interpretan en hora de Argentina (`src/lib/tz.ts`), no en la del servidor.
+
 ## Plano de agencia (visión del dueño del CRM)
 
 - `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).

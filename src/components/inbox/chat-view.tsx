@@ -10,6 +10,7 @@ import type { ChatMessage, ConversationDetail } from "@/lib/inbox/queries";
 import type { ContactTagSummary } from "@/lib/crm/tag-labels";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
+import { ConversationActions } from "./conversation-actions";
 import { TemplatePicker } from "./template-picker";
 import { TypingBubble } from "./typing-bubble";
 import { TriagePanel } from "./triage-panel";
@@ -27,11 +28,15 @@ export function ChatView({
   messages,
   triage,
   tags,
+  delegation,
+  canDelegate,
 }: {
   conversation: ConversationDetail;
   messages: ChatMessage[];
   triage: TriageRow | null;
   tags: ContactTagSummary | null;
+  delegation: { id: string; status: string } | null;
+  canDelegate: boolean;
 }) {
   const router = useRouter();
   const [local, setLocal] = useState<LocalMessage[]>([]);
@@ -196,7 +201,14 @@ export function ChatView({
           {aiEnabled ? "IA activa" : "IA pausada"}
           {aiEnabled ? <Pause className="size-3.5" strokeWidth={2} /> : <Play className="size-3.5" strokeWidth={2} />}
         </button>
+        <ConversationActions conversationId={conversation.id} status={conversation.status} delegation={delegation} canDelegate={canDelegate} />
       </header>
+
+      {conversation.delegatedFrom && (
+        <p role="status" className="border-b border-line bg-accent-amber/10 px-6 py-2 text-[12.5px] text-ink">
+          Expediente delegado por {conversation.delegatedFrom}. Es de solo lectura: no se puede responder por el canal original desde acá.
+        </p>
+      )}
 
       {editingTags && conversation.contactId && contactTags && (
         <ContactTagsEditPanel
@@ -259,7 +271,7 @@ export function ChatView({
         )}
       </div>
 
-      <Composer conversation={conversation} onSend={send} onTyping={pingTyping} text={text} setText={setText} />
+      {!conversation.delegatedFrom && <Composer conversation={conversation} onSend={send} onTyping={pingTyping} text={text} setText={setText} />}
     </section>
   );
 }

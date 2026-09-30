@@ -12,6 +12,9 @@ import {
   Rotate3d,
   Users,
 } from "lucide-react";
+import { PublishPanel } from "@/components/properties/publish-panel";
+import { publishBlockers } from "@/lib/publications/logic";
+import { getOrgBranding, getPublication } from "@/lib/publications/queries";
 import { InterestedList } from "@/components/properties/interested-list";
 import { VISIT_LABEL, VISIT_TONE } from "@/components/visits/visit-card";
 import { Card, PageHeader } from "@/components/ui/primitives";
@@ -53,10 +56,13 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
   const guardado = sp.guardado === "1";
   const resync = sp.resync === "1";
 
-  const [interest, visits] = await Promise.all([
+  const [interest, visits, publication, branding] = await Promise.all([
     listPropertyInterest(propertyId, orgId),
     listVisitsByProperty(propertyId, orgId),
+    getPublication(orgId, propertyId),
+    getOrgBranding(orgId),
   ]);
+  const pubFlag = typeof sp.pub === "string" ? sp.pub : null;
 
   const price =
     property.price === null
@@ -91,6 +97,11 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
       {guardado && (
         <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">
           Cambios guardados.
+        </p>
+      )}
+      {pubFlag && (
+        <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">
+          {pubFlag === "publicada" ? "Ficha publicada." : pubFlag === "pausada" ? "Ficha pausada: el enlace dejó de funcionar." : pubFlag === "bloqueada" ? "No se pudo publicar: revisá lo que falta." : "Configuración guardada."}
         </p>
       )}
       {resync && (
@@ -256,6 +267,7 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
         </div>
 
         <div className="flex flex-col gap-5">
+          <PublishPanel propertyId={propertyId} publication={publication} blockers={publishBlockers(property, branding)} />
           <Card className="p-5">
             <div className="flex items-center justify-between gap-3">
               <p className="text-[22px] font-bold tabular-nums text-ink">

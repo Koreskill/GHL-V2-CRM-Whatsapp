@@ -169,6 +169,8 @@ async function recordVisitRequest(input: {
   organizationId: string;
   contactId: string;
   conversationId: string;
+  /** Mensaje del cliente que originó el pedido: queda en la visita para auditar y no duplicar. */
+  messageId?: string;
   propertyId: string;
   note: string;
 }) {
@@ -206,6 +208,7 @@ async function recordVisitRequest(input: {
       propertyId: input.propertyId,
       status: "solicitada",
       notes: input.note,
+      metadata: { origen: { conversationId: input.conversationId, messageId: input.messageId ?? null, por: "agente" } },
     })
     .returning({ id: visits.id });
 
@@ -387,6 +390,7 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
         organizationId: conv.organizationId,
         contactId: conv.contactId,
         conversationId,
+        messageId: trigger.id,
         propertyId: composed.visitRequest.propertyId,
         note: composed.visitRequest.note,
       }).catch(() => {
