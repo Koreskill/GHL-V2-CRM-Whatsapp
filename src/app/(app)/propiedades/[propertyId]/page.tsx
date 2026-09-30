@@ -13,7 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { PublishPanel } from "@/components/properties/publish-panel";
-import { publishBlockers } from "@/lib/publications/logic";
+import { publishBlockers, resolveBranding } from "@/lib/publications/logic";
 import { getOrgBranding, getPublication } from "@/lib/publications/queries";
 import { InterestedList } from "@/components/properties/interested-list";
 import { VISIT_LABEL, VISIT_TONE } from "@/components/visits/visit-card";
@@ -59,8 +59,9 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
   const [interest, visits, publication, branding] = await Promise.all([
     listPropertyInterest(propertyId, orgId),
     listVisitsByProperty(propertyId, orgId),
-    getPublication(orgId, propertyId),
-    getOrgBranding(orgId),
+    // La ficha pública es un extra: si su tabla no está (migración pendiente), la propiedad carga igual.
+    getPublication(orgId, propertyId).catch(() => null),
+    getOrgBranding(orgId).catch(() => resolveBranding(null)),
   ]);
   const pubFlag = typeof sp.pub === "string" ? sp.pub : null;
 
