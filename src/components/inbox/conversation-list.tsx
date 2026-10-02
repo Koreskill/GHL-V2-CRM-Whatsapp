@@ -10,6 +10,7 @@ import type { OpenDelegation } from "@/lib/delegations/flow";
 import { Avatar } from "./avatar";
 import { DelegationList } from "./delegation-list";
 import { InboxAutoRefresh } from "./inbox-auto-refresh";
+import { InboxTabs } from "./inbox-tabs";
 
 const CHANNELS: Channel[] = ["whatsapp", "instagram", "facebook"];
 
@@ -50,28 +51,16 @@ export function ConversationList({
           <h1 className="text-[18px] font-semibold text-ink">Conversaciones</h1>
         </div>
 
-        <div role="tablist" aria-label="Estado" className="mt-3 flex gap-1 rounded-xl bg-field p-0.5">
-          {([
-            ["desactivas", "Desactivas"],
-            ["activas", "Activas"],
-            ["archivadas", "Archivadas"],
-            ["delegadas", "Delegadas"],
-          ] as const).map(([id, label]) => (
-            <Link
-              key={id}
-              role="tab"
-              aria-selected={tab === id}
-              href={inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: id })}
-              className={cn(
-                "flex h-8 flex-1 items-center justify-center gap-1 rounded-lg px-1 text-[12px] font-medium transition-colors",
-                tab === id ? "bg-card text-ink shadow-card" : "text-muted hover:text-ink",
-              )}
-            >
-              {label}
-              <span className={cn("rounded-md px-1 text-[11px]", id === "delegadas" && counts.delegadas > 0 ? "bg-primary text-white" : "bg-line/60 text-muted")}>{counts[id]}</span>
-            </Link>
-          ))}
-        </div>
+        <InboxTabs
+          active={tab}
+          counts={counts}
+          hrefs={{
+            activas: inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: "activas" }),
+            desactivas: inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: "desactivas" }),
+            archivadas: inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: "archivadas" }),
+            delegadas: inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: "delegadas" }),
+          }}
+        />
 
         <form action="/conversaciones" className="mt-4">
           <input type="hidden" name="tab" value={tab} />

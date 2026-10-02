@@ -74,7 +74,7 @@ export async function listVisibleEvents(v: Viewer, from: Date, to: Date, filters
     lt(newsEvents.startAt, to),
     // Los que no se repiten tienen que terminar después del inicio del rango; los que se repiten, no haber vencido.
     or(
-      and(eq(newsEvents.recurrence, "none"), gte(sql`coalesce(${newsEvents.endAt}, ${newsEvents.startAt})`, from)),
+      and(eq(newsEvents.recurrence, "none"), sql`coalesce(${newsEvents.endAt}, ${newsEvents.startAt}) >= ${from.toISOString()}::timestamptz`),
       and(sql`${newsEvents.recurrence} <> 'none'`, or(isNull(newsEvents.recurrenceUntil), gte(newsEvents.recurrenceUntil, from))),
     )!,
   ];
