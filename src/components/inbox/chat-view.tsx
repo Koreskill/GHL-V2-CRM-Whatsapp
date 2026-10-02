@@ -11,6 +11,7 @@ import type { ContactTagSummary } from "@/lib/crm/tag-labels";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./avatar";
 import { ConversationActions } from "./conversation-actions";
+import { RecommendationsPanel } from "./recommendations-panel";
 import { TemplatePicker } from "./template-picker";
 import { TypingBubble } from "./typing-bubble";
 import { TriagePanel } from "./triage-panel";
@@ -176,6 +177,7 @@ export function ChatView({
         : label;
 
   return (
+    <div className="flex min-w-0 flex-1">
     <section className="flex min-w-0 flex-1 flex-col">
       <header className="flex h-[68px] shrink-0 items-center gap-3 border-b border-line bg-card px-6">
         <Avatar name={conversation.name} picture={conversation.picture} channel={conversation.channel} size="lg" />
@@ -273,6 +275,14 @@ export function ChatView({
 
       {!conversation.delegatedFrom && <Composer conversation={conversation} onSend={send} onTyping={pingTyping} text={text} setText={setText} />}
     </section>
+      {!conversation.delegatedFrom && (
+        <RecommendationsPanel
+          conversationId={conversation.id}
+          // Solo carga el enlace en la barra: la persona lo lee y lo manda.
+          onPick={(link) => setText((prev) => (prev.trim() ? `${prev.trim()}\n${link}` : link))}
+        />
+      )}
+    </div>
   );
 }
 

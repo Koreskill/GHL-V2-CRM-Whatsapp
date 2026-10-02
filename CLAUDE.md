@@ -248,6 +248,19 @@ Migraciones **0013 a 0016: hay que aplicarlas (rol dueño) ANTES de desplegar**.
 - **Inbox (E):** `conversations.status` (activa | desactiva | archivada) es un eje aparte de `ai_enabled`. Archivar oculta, no borra. Delegar NO cambia `organization_id`: crea una solicitud; tomarla es atómica y le crea a la receptora un expediente de solo lectura (`metadata.delegation`), sin poder responder por el canal del origen (`deliverMessage` lo rechaza).
 - **Calendario (F):** Cal.com por inmobiliaria (`calendar_integrations`, clave cifrada AES-256-GCM con `INTEGRATIONS_ENCRYPTION_KEY`). `visit_bookings` une visita y reserva (único por visita y por uid). Reprogramar en Cal.com devuelve un uid NUEVO. Webhook `/api/webhooks/calcom/[integrationId]` firmado con el secreto de esa organización; barrido `/api/cron/calendar`. Las variables globales `CALCOM_*` solo valen para `CALCOM_LEGACY_ORG_ID`. Las horas de los formularios se interpretan en hora de Argentina (`src/lib/tz.ts`), no en la del servidor.
 
+## Novedades, archivadas y puntaje de compatibilidad (migración 0017)
+
+**La migración 0017 hay que aplicarla ANTES de desplegar**: agrega `prospect_requirements.criteria` y todo lo que lee el código nuevo rompe sin ella (incluido el triaje). Script listo: `drizzle/manual_apply_0017.sql`.
+
+- **Novedades:** una sola tabla canónica `news_events` (alcance `network | internal | client`). El calendario de cada cliente es esa misma tabla filtrada por `organization_id`, no otra. **`lib/news/logic.ts` (`canSee`) es la ÚNICA regla de visibilidad**; la consulta SQL la replica y se vuelve a aplicar `canSee` sobre lo devuelto. Equivalencias: cliente = inmobiliaria, red = `networks`, equipo interno = administradores de la agencia. Un evento no visible responde igual que uno inexistente. Crear/editar/borrar: solo agencia. Las repeticiones no se guardan: se expanden al leer (`expandOccurrences`). Fechas en hora de Argentina (`lib/tz.ts`).
+- **Archivadas** es una pestaña de Conversaciones (Desactivas | Activas | Archivadas | Delegadas). Archivar solo cambia `conversations.status`: historial, perfil y puntajes quedan intactos.
+- **Puntaje de compatibilidad** (`lib/scoring/`): NO es una calidad de la propiedad; es qué tan bien encaja con ESTA conversación. **Ningún modelo pone el número**: la IA solo extrae preferencias (`extract.ts`) y el código aplica la fórmula (`score.ts`). Pesos, bandas, tolerancia de presupuesto y qué es "duro" por defecto viven en `scoring/config.ts` y en ningún otro lado.
+  - Los VALORES del perfil siguen en las columnas de `prospect_requirements` (las leen el Pipeline y el triaje); su procedencia (IA o manual, mensaje, confianza, si es indispensable) en `criteria`. No se duplicó el perfil en otra tabla.
+  - Lo desconocido NO penaliza: el puntaje se normaliza sobre los grupos que el contacto definió Y que la propiedad permite comparar. "Flexible" solo con evidencia explícita. Un conflicto duro resta 35 y topa en 39. Venta y alquiler nunca se mezclan (no se puntúa).
+  - Una corrección manual (`saveManualPreferences`) bloquea el criterio: `applyTags` no lo vuelve a pisar.
+  - `recomputeScores` corre tras cada cambio del perfil (compose.ts) y tras cada corrección; el historial (`lead_property_score_history`) guarda solo lo que se movió, con el criterio y el mensaje que lo causaron.
+  - `candidates.ts` decide qué se puntúa: cartera propia `disponible|reservada`, red solo `publicada` y de OTRA inmobiliaria.
+
 ## Plano de agencia (visión del dueño del CRM)
 
 - `auth.users.raw_app_meta_data.is_agency_admin = true` habilita `/agencia`. Es un eje aparte del rol: un admin de inmobiliaria NO lo tiene. Se asigna por SQL (`drizzle/manual_agency_admin.sql`).

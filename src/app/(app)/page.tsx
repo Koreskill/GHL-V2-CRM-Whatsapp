@@ -2,7 +2,8 @@ import Link from "next/link";
 import { Activity, AlertCircle, Bot, MessageCircle, Send, UserPlus, Users, Workflow, type LucideIcon } from "lucide-react";
 import { ChannelBadge } from "@/components/channel-badge";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
-import { requireOrgId } from "@/lib/auth";
+import { NewsSummary } from "@/components/news/news-summary";
+import { getSession, requireOrgId } from "@/lib/auth";
 import { getDashboard, listActivity, type ActivityKind } from "@/lib/crm/queries";
 import { formatListDate } from "@/lib/format";
 import { PIPELINE_STAGES } from "@/lib/pipeline";
@@ -20,6 +21,7 @@ const ACTIVITY: Record<ActivityKind, { icon: LucideIcon; tone: string; label: (w
 
 export default async function DashboardPage() {
   const orgId = await requireOrgId();
+  const session = await getSession();
   const [d, activity] = await Promise.all([getDashboard(orgId), listActivity(orgId, 6)]);
 
   const metrics = [
@@ -110,6 +112,8 @@ export default async function DashboardPage() {
           </Link>
         </Card>
       </div>
+
+      {session && <NewsSummary session={session} />}
     </>
   );
 }

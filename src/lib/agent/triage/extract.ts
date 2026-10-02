@@ -22,7 +22,23 @@ export type ExtractedFields = {
   ambientes?: number | null;
   dormitorios?: number | null;
   tipo_credito?: string | null;
+  // ── Para el puntaje de compatibilidad ──
+  banos_min?: number | null;
+  superficie_min?: number | null;
+  provincia?: string | null;
+  /** Solo true si el contacto dijo que puede estirar el presupuesto. Nunca se supone. */
+  presupuesto_flexible?: boolean | null;
+  amenities_requeridos?: string[];
+  amenities_preferidos?: string[];
+  excluir?: string[];
+  /** Criterios que el contacto dijo que son INDISPENSABLES (no solo preferencias). */
+  estrictos?: StrictField[];
+  /** 0–1: qué tan claro quedó lo extraído en este mensaje. */
+  confianza?: number;
 };
+
+export const STRICT_FIELDS = ["presupuesto", "zona", "dormitorios", "banos", "tipo", "superficie"] as const;
+export type StrictField = (typeof STRICT_FIELDS)[number];
 
 export type ExtractResult =
   | { success: true; fields: ExtractedFields }
@@ -39,6 +55,15 @@ const SCHEMA = {
     ambientes: { type: ["integer", "null"] },
     dormitorios: { type: ["integer", "null"] },
     tipo_credito: { type: ["string", "null"], description: "Infonavit, Fovissste, bancario, UVA…" },
+    banos_min: { type: ["integer", "null"] },
+    superficie_min: { type: ["number", "null"], description: "Metros cuadrados mínimos." },
+    provincia: { type: ["string", "null"] },
+    presupuesto_flexible: { type: ["boolean", "null"], description: "true SOLO si dijo que puede pasarse del presupuesto." },
+    amenities_requeridos: { type: "array", items: { type: "string" }, description: "Lo que dijo que TIENE que tener (indispensable)." },
+    amenities_preferidos: { type: "array", items: { type: "string" }, description: "Lo que le gustaría, sin ser indispensable." },
+    excluir: { type: "array", items: { type: "string" }, description: "Lo que NO quiere que tenga." },
+    estrictos: { type: "array", items: { type: "string", enum: ["presupuesto", "zona", "dormitorios", "banos", "tipo", "superficie"] }, description: "Criterios que dijo que son indispensables." },
+    confianza: { type: "number", description: "0 a 1: qué tan claro quedó lo que extrajiste." },
   },
 } as const;
 
@@ -55,6 +80,11 @@ Reglas que no se rompen:
 - Si dice "hasta X", es presupuesto_max. Si dice "desde X", es presupuesto_min.
 - Si el contacto CORRIGE un dato anterior, devolvé el valor nuevo.
 - Para vaciar un campo que el contacto descartó explícitamente, devolvelo como null.
+- amenities_requeridos: solo lo que dijo con palabras como "indispensable", "tiene que tener", "sí o sí", "necesito". Si dice "me gustaría" o "ideal", va en amenities_preferidos.
+- estrictos: solo los criterios que el contacto marcó como obligatorios ("máximo", "no puedo pasar de", "tiene que ser en", "mínimo tres dormitorios"). Un dato dicho sin esa fuerza NO va en estrictos.
+- presupuesto_flexible: true SOLO si dijo que puede estirarse o que es negociable. Si no lo dijo, no pongas el campo.
+- excluir: lo que dijo que no quiere ("sin escaleras", "no quiero planta baja").
+- confianza: 0.9 o más si lo dijo claro; menos si lo inferís de una frase ambigua.
 
 Si no hay nada nuevo, devolvé {}.`;
 
@@ -106,6 +136,37 @@ function parse(raw: string): ExtractedFields | null {
     if (v === null) out.tipo_credito = null;
     else if (typeof v === "string" && v.trim()) out.tipo_credito = v.trim().slice(0, 60);
   }
+
+  const num = (key: "banos_min" | "superficie_min", max: number, int: boolean) => {
+    if (!(key in p)) return;
+    const v = p[key];
+    if (v === null) out[key] = null;
+    else if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max && (!int || Number.isInteger(v))) out[key] = v;
+  };
+  num("banos_min", 30, true);
+  num("superficie_min", 100000, false);
+
+  if ("provincia" in p) {
+    const v = p.provincia;
+    if (v === null) out.provincia = null;
+    else if (typeof v === "string" && v.trim()) out.provincia = v.trim().slice(0, 60);
+  }
+  if (typeof p.presupuesto_flexible === "boolean") out.presupuesto_flexible = p.presupuesto_flexible;
+
+  const words = (key: "amenities_requeridos" | "amenities_preferidos" | "excluir") => {
+    if (!Array.isArray(p[key])) return;
+    const l = (p[key] as unknown[]).filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.trim().slice(0, 40));
+    if (l.length) out[key] = [...new Set(l)].slice(0, 10);
+  };
+  words("amenities_requeridos");
+  words("amenities_preferidos");
+  words("excluir");
+
+  if (Array.isArray(p.estrictos)) {
+    const l = (p.estrictos as unknown[]).filter((x): x is StrictField => typeof x === "string" && (STRICT_FIELDS as readonly string[]).includes(x));
+    if (l.length) out.estrictos = [...new Set(l)];
+  }
+  if (typeof p.confianza === "number" && Number.isFinite(p.confianza)) out.confianza = Math.max(0, Math.min(1, p.confianza));
 
   return out;
 }

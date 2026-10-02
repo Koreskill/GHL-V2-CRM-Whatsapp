@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -565,6 +566,10 @@ export const prospectRequirements = pgTable(
     // Libre: Infonavit, Fovissste, bancario, hipotecario UVA… cambia según el país.
     creditType: text("credit_type"),
     rawExtraction: jsonb("raw_extraction").$type<Record<string, unknown>>(),
+    // Procedencia de cada criterio que usa el puntaje: { valor?, estricto, confianza, origen: ia|manual,
+    // mensaje, actualizado }. Los VALORES siguen en las columnas de arriba (las leen el Pipeline y el
+    // triaje); acá va de dónde salió cada uno y lo que no tiene columna (provincia, excluidos, presupuesto flexible).
+    criteria: jsonb("criteria").$type<Record<string, unknown>>().notNull().default({}),
     confidence: numeric("confidence"),
     status: text("status").notNull().default("activo"),
     ...timestamps,
@@ -1178,4 +1183,112 @@ export const visitBookings = pgTable(
     uniqueIndex("visit_bookings_org_uid_key").on(t.organizationId, t.bookingUid).where(sql`${t.bookingUid} is not null`),
     index("visit_bookings_org_status_idx").on(t.organizationId, t.syncStatus),
   ],
+);
+
+// ─── Novedades: calendario, avisos y recordatorios (una sola tabla canónica) ─
+// Calendario de la plataforma. NO hay un calendario aparte por cliente: el de cada cliente es esta
+// misma tabla filtrada por `organization_id`. Quién ve qué lo decide `lib/news/visibility.ts`.
+//   network  -> visible para los miembros de la red (network_id)
+//   internal -> solo el equipo interno (administradores de la agencia)
+//   client   -> asociado a UN cliente (organization_id), solo equipo interno con acceso a ese cliente
+export const newsEvents = pgTable(
+  "news_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scope: text("scope").notNull(), // network | internal | client
+    networkId: uuid("network_id").references(() => networks.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    // activity | reminder | meeting | training | network_event | announcement | deadline | custom
+    eventType: text("event_type").notNull().default("custom"),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    endAt: timestamp("end_at", { withTimezone: true }),
+    allDay: boolean("all_day").notNull().default(false),
+    location: text("location"),
+    meetingUrl: text("meeting_url"),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    // auth.users vive en otro esquema: sin FK, como assigned_user_id.
+    assignedUserIds: jsonb("assigned_user_ids").$type<string[]>().notNull().default([]),
+    reminderAt: timestamp("reminder_at", { withTimezone: true }),
+    // none | daily | weekly | monthly | yearly (se expande al leer; no se guardan las repeticiones)
+    recurrence: text("recurrence").notNull().default("none"),
+    recurrenceUntil: timestamp("recurrence_until", { withTimezone: true }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdBy: uuid("created_by").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index("news_events_scope_start_idx").on(t.scope, t.startAt),
+    index("news_events_org_start_idx").on(t.organizationId, t.startAt),
+    index("news_events_network_start_idx").on(t.networkId, t.startAt),
+    // Cada alcance tiene exactamente su destino: una red, un cliente, o ninguno.
+    check(
+      "news_events_scope_target",
+      sql`(${t.scope} = 'network' and ${t.networkId} is not null and ${t.organizationId} is null)
+        or (${t.scope} = 'client' and ${t.organizationId} is not null and ${t.networkId} is null)
+        or (${t.scope} = 'internal' and ${t.networkId} is null and ${t.organizationId} is null)`,
+    ),
+  ],
+);
+
+// ─── Compatibilidad propiedad ↔ conversación (puntaje dinámico) ─────────────
+// El puntaje NO es una calidad de la propiedad: es qué tan bien encaja con ESTE contacto ahora. La
+// misma propiedad tiene un puntaje distinto para cada conversación. Lo calcula código determinista
+// sobre el perfil estructurado; ningún modelo pone el número.
+export const leadPropertyScores = pgTable(
+  "lead_property_scores",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // cartera | red
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "cascade" }),
+    networkListingId: uuid("network_listing_id").references(() => networkPropertyListings.id, { onDelete: "cascade" }),
+    score: integer("score").notNull(), // 0–100
+    confidence: numeric("confidence", { precision: 4, scale: 3 }).notNull(), // 0–1: cuánto sabemos del contacto
+    matched: jsonb("matched").$type<string[]>().notNull().default([]),
+    conflicting: jsonb("conflicting").$type<string[]>().notNull().default([]),
+    missing: jsonb("missing").$type<string[]>().notNull().default([]),
+    breakdown: jsonb("breakdown").$type<Record<string, unknown>>().notNull().default({}),
+    hardConflicts: integer("hard_conflicts").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("lead_property_scores_conv_property_key").on(t.conversationId, t.propertyId).where(sql`${t.propertyId} is not null`),
+    uniqueIndex("lead_property_scores_conv_listing_key").on(t.conversationId, t.networkListingId).where(sql`${t.networkListingId} is not null`),
+    index("lead_property_scores_conv_score_idx").on(t.conversationId, t.kind, t.score),
+    check(
+      "lead_property_scores_one_target",
+      sql`(${t.propertyId} is not null and ${t.networkListingId} is null and ${t.kind} = 'cartera')
+        or (${t.networkListingId} is not null and ${t.propertyId} is null and ${t.kind} = 'red')`,
+    ),
+  ],
+);
+
+// Historial append-only: qué cambió el puntaje y qué mensaje lo disparó. Solo se escribe si el
+// puntaje cambió, no en cada recálculo.
+export const leadPropertyScoreHistory = pgTable(
+  "lead_property_score_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    targetId: uuid("target_id").notNull(), // propiedad o publicación de red, según kind
+    previousScore: integer("previous_score"),
+    newScore: integer("new_score").notNull(),
+    changedCriteria: jsonb("changed_criteria").$type<string[]>().notNull().default([]),
+    triggeringMessageId: uuid("triggering_message_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("lead_property_score_history_conv_idx").on(t.conversationId, t.createdAt)],
 );

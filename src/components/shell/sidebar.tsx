@@ -14,6 +14,7 @@ import {
   LayoutGrid,
   LogOut,
   MapPin,
+  Megaphone,
   MessageCircle,
   Settings,
   Users,
@@ -41,6 +42,7 @@ const groups: NavGroup[] = [
   {
     label: "Productividad",
     items: [
+      { href: "/novedades", label: "Novedades", icon: Megaphone },
       { href: "/actividades", label: "Actividades", icon: Activity },
       { href: "/calendario", label: "Calendario", icon: CalendarDays },
     ],

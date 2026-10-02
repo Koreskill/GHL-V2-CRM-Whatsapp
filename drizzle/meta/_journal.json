@@ -120,6 +120,13 @@
       "when": 1790802413545,
       "tag": "0016_calendario_por_organizacion",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790950962333,
+      "tag": "0017_novedades_y_puntaje",
+      "breakpoints": true
     }
   ]
 }

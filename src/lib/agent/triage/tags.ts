@@ -12,6 +12,8 @@ import {
 import { readChoice, readNoul, readScore, type DecisionAnswer } from "@/lib/ai/decisions";
 import { TEMPERATURES, URGENCIES } from "./questions";
 import type { ExtractedFields } from "./extract";
+import { applyChanges, lockedKeys, type Change, type CriterionKey, type FlatValues, type StoredCriteria } from "@/lib/scoring/profile";
+import { emptyFlat, flatFromRow } from "@/lib/scoring/flat";
 
 /**
  * Persistencia de las etiquetas del contacto.
@@ -84,9 +86,11 @@ export async function applyTags(input: {
   conversationId: string;
   decisions: TagDecisions;
   extracted: ExtractedFields;
-}): Promise<{ requirementId: string; temperature: LeadTemperature | null }> {
+  /** Mensaje del contacto que originó estos datos: queda como procedencia de cada criterio. */
+  messageId?: string | null;
+}): Promise<{ requirementId: string; temperature: LeadTemperature | null; changedCriteria: CriterionKey[] }> {
   const db = getDb();
-  const { organizationId, contactId, conversationId, decisions, extracted } = input;
+  const { organizationId, contactId, conversationId } = input;
 
   // Perfil vigente del contacto, o uno nuevo si es su primera consulta.
   const [existing] = await db
@@ -101,6 +105,17 @@ export async function applyTags(input: {
     )
     .orderBy(desc(prospectRequirements.updatedAt))
     .limit(1);
+
+  // Lo que una persona corrigió a mano manda: la extracción automática no lo vuelve a pisar.
+  const locked = lockedKeys(existing?.criteria as StoredCriteria | undefined);
+  const decisions: TagDecisions = { ...input.decisions };
+  const extracted: ExtractedFields = { ...input.extracted };
+  if (locked.has("operation")) decisions.operation = null;
+  if (locked.has("propertyTypes")) decisions.propertyType = null;
+  if (locked.has("zones")) delete extracted.zonas;
+  if (locked.has("budgetMin")) delete extracted.presupuesto_min;
+  if (locked.has("budgetMax")) delete extracted.presupuesto_max;
+  if (locked.has("bedroomsMin")) delete extracted.dormitorios;
 
   // Solo se arma el patch con lo que realmente cambia. `undefined` = no vino; `null` = vaciar.
   const patch: Record<string, unknown> = {};
@@ -149,6 +164,57 @@ export async function applyTags(input: {
     };
   }
 
+  // ── Procedencia y criterios del puntaje de compatibilidad ──
+  // Cada criterio guarda de dónde salió (IA, con su mensaje y confianza) y si es indispensable. Los
+  // campos nuevos (baños, superficie, amenities, excluidos, provincia) se escriben acá.
+  const changes: Change[] = [];
+  const push = (key: CriterionKey, value: unknown) => changes.push({ key, value });
+  if (decisions.operation) push("operation", decisions.operation);
+  if (decisions.propertyType) push("propertyTypes", [decisions.propertyType]);
+  if (extracted.zonas?.length) push("zones", extracted.zonas);
+  if (extracted.presupuesto_min !== undefined) push("budgetMin", extracted.presupuesto_min);
+  if (extracted.presupuesto_max !== undefined) push("budgetMax", extracted.presupuesto_max);
+  if (extracted.dormitorios !== undefined) push("bedroomsMin", extracted.dormitorios);
+  if (extracted.banos_min !== undefined && !locked.has("bathroomsMin")) push("bathroomsMin", extracted.banos_min);
+  if (extracted.superficie_min !== undefined && !locked.has("surfaceMin")) push("surfaceMin", extracted.superficie_min);
+  if (extracted.provincia !== undefined && !locked.has("province")) push("province", extracted.provincia);
+  // Flexible solo con evidencia explícita: el modelo no lo supone.
+  if (typeof extracted.presupuesto_flexible === "boolean" && !locked.has("budgetFlexible")) push("budgetFlexible", extracted.presupuesto_flexible);
+  if (extracted.amenities_requeridos?.length && !locked.has("requiredAmenities")) push("requiredAmenities", extracted.amenities_requeridos);
+  if (extracted.amenities_preferidos?.length && !locked.has("preferredAmenities")) push("preferredAmenities", extracted.amenities_preferidos);
+  if (extracted.excluir?.length && !locked.has("excludedFeatures")) push("excludedFeatures", extracted.excluir);
+
+  // "Es indispensable": marca como duro un criterio, aunque el dato no haya cambiado en este mensaje.
+  const STRICT_KEY: Record<string, CriterionKey[]> = {
+    presupuesto: ["budgetMax"],
+    zona: ["zones"],
+    dormitorios: ["bedroomsMin"],
+    banos: ["bathroomsMin"],
+    tipo: ["propertyTypes"],
+    superficie: ["surfaceMin"],
+  };
+  for (const f of extracted.estrictos ?? []) {
+    for (const key of STRICT_KEY[f] ?? []) {
+      if (locked.has(key)) continue;
+      const ch = changes.find((c) => c.key === key);
+      if (ch) ch.strict = true;
+      else changes.push({ key, value: undefined, strict: true });
+    }
+  }
+
+  const current: FlatValues = existing ? flatFromRow(existing) : emptyFlat();
+  const result = applyChanges(current, existing?.criteria as StoredCriteria | undefined, changes, {
+    source: "ai",
+    messageId: input.messageId ?? null,
+    confidence: extracted.confianza ?? 0.8,
+    now: new Date().toISOString(),
+  });
+  // Los valores viejos ya se escribieron arriba; de acá solo salen las columnas que antes no se llenaban.
+  for (const col of ["bathroomsMin", "areaMin", "mustHave", "niceToHave"] as const) {
+    if (col in result.flat) patch[col] = col === "areaMin" && result.flat[col] !== null ? String(result.flat[col]) : result.flat[col];
+  }
+  if (result.changed.length || changes.length) patch.criteria = result.criteria;
+
   let requirementId: string;
   if (existing) {
     if (Object.keys(patch).length) {
@@ -175,7 +241,7 @@ export async function applyTags(input: {
       .where(and(eq(contacts.id, contactId), eq(contacts.organizationId, organizationId)));
   }
 
-  return { requirementId, temperature: decisions.temperature };
+  return { requirementId, temperature: decisions.temperature, changedCriteria: result.changed };
 }
 
 /**

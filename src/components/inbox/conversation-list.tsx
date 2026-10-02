@@ -54,6 +54,7 @@ export function ConversationList({
           {([
             ["desactivas", "Desactivas"],
             ["activas", "Activas"],
+            ["archivadas", "Archivadas"],
             ["delegadas", "Delegadas"],
           ] as const).map(([id, label]) => (
             <Link
@@ -62,7 +63,7 @@ export function ConversationList({
               aria-selected={tab === id}
               href={inboxHref("/conversaciones", { channel: filters.channel, q: filters.q, tab: id })}
               className={cn(
-                "flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium transition-colors",
+                "flex h-8 flex-1 items-center justify-center gap-1 rounded-lg px-1 text-[12px] font-medium transition-colors",
                 tab === id ? "bg-card text-ink shadow-card" : "text-muted hover:text-ink",
               )}
             >
@@ -154,13 +155,6 @@ export function ConversationList({
           </ul>
         )}
       </div>
-      {tab !== "delegadas" && (
-        <div className="border-t border-line px-5 py-2 text-[12px] text-muted">
-          <Link href={inboxHref("/conversaciones", { tab: tab === "archivadas" ? "activas" : "archivadas" })} className="hover:text-ink hover:underline">
-            {tab === "archivadas" ? "Volver a las activas" : `Ver archivadas (${counts.archivadas})`}
-          </Link>
-        </div>
-      )}
     </section>
   );
 }

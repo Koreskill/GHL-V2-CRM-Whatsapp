@@ -15,6 +15,7 @@ import { hasAdminKey } from "@/lib/supabase/admin";
 import { getCatalogSummary, getSyncConfig } from "@/lib/properties/catalog";
 import { countOpenIncidents } from "@/lib/incidents/report";
 import { countVisits } from "@/lib/visits/queries";
+import { ClientNews } from "@/components/news/news-summary";
 import { ClientSheetPanel } from "@/components/agency/client-sheet-panel";
 import { enterClient } from "../actions";
 import { cn } from "@/lib/utils";
@@ -231,6 +232,8 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
               configuración la cambia el administrador del cliente desde su Configuración.
             </p>
           </Card>
+
+          <ClientNews clientOrgId={orgId} />
 
           <ClientSheetPanel
             orgId={orgId}

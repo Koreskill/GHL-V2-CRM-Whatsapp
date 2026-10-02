@@ -21,6 +21,7 @@ import {
 import { buildCriteria, retrieve, type ProfileSnapshot, type Retrieval } from "./retrieval";
 import { routeFor, type Route, type RoutingPolicy, type RoutingResult } from "./routes";
 import { applyTags, markPropertyInterest, readTagDecisions } from "./tags";
+import { recomputeScores } from "@/lib/scoring/store";
 
 /**
  * Compone la respuesta a un mensaje entrante. NO la envía.
@@ -297,15 +298,22 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
     // conversación: si el cliente venía por alquiler y ahora pregunta por venta, el perfil tiene
     // que quedar en venta. Si no, el turno siguiente vuelve a arrastrar la operación vieja.
     const turnOperation = detectOperation(text) ?? intentOperation(classification.intent) ?? tagDecisions.operation;
-    await applyTags({
+    const tagged = await applyTags({
       organizationId,
       contactId,
       conversationId,
       decisions: { ...tagDecisions, operation: turnOperation as typeof tagDecisions.operation },
       extracted,
-    }).catch(() => {
-      // El perfil es información de apoyo: si falla, el contacto igual recibe respuesta.
-    });
+      messageId: (input.requestRef?.messageId as string | undefined) ?? null,
+    }).catch(() => null);
+    // Si el perfil cambió, se recalculan los puntajes de compatibilidad de esta conversación. Es
+    // código determinista sobre el perfil ya actualizado; si falla, el contacto igual recibe respuesta.
+    if (tagged?.changedCriteria.length) {
+      await recomputeScores(organizationId, conversationId, {
+        changedCriteria: tagged.changedCriteria,
+        triggeringMessageId: (input.requestRef?.messageId as string | undefined) ?? null,
+      }).catch(() => {});
+    }
     if (tagDecisions.interestedInShownProperty >= 0.6 && tagDecisions.temperature) {
       await markPropertyInterest({ organizationId, contactId, temperature: tagDecisions.temperature }).catch(() => {});
     }
