@@ -48,6 +48,7 @@ export const propertyStatusEnum = pgEnum("property_status", [
   "borrador",
   "disponible",
   "reservada",
+  "senada",
   "vendida",
   "alquilada",
   "pausada",

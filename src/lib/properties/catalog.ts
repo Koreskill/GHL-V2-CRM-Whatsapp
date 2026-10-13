@@ -4,6 +4,7 @@ import {
   contacts,
   dealProperties,
   deals,
+  networkPropertyListings,
   properties,
   propertySyncConfigs,
   prospectRequirements,
@@ -39,6 +40,8 @@ export type PropertyCard = {
   syncIssues: string[];
   syncedAt: string | null;
   source: string;
+  /** Está publicada en alguna red (network_property_listings.status = publicada). */
+  networkShared: boolean;
   deals: number;
   visits: number;
 };
@@ -47,7 +50,9 @@ function buildWhere(orgId: string, f: PropertyFilters): SQL {
   const where: SQL[] = [eq(properties.organizationId, orgId)];
   if (f.operation) where.push(sql`${properties.operation}::text = ${f.operation}`);
   if (f.propertyType) where.push(sql`${properties.propertyType}::text = ${f.propertyType}`);
+  // Las pausadas (lo que salió de la hoja) no se muestran salvo que se pida ese estado a propósito.
   if (f.status) where.push(sql`${properties.status}::text = ${f.status}`);
+  else where.push(sql`${properties.status}::text <> 'pausada'`);
   if (f.zone) where.push(ilike(properties.zone, `%${f.zone.replace(/[\\%_]/g, (m) => `\\${m}`)}%`));
   if (f.priceMin !== undefined) where.push(gte(properties.price, String(f.priceMin)));
   if (f.priceMax !== undefined) where.push(lte(properties.price, String(f.priceMax)));
@@ -87,6 +92,7 @@ export async function listCatalog(orgId: string, f: PropertyFilters, limit = 120
       syncIssues: properties.syncIssues,
       syncedAt: properties.syncedAt,
       source: properties.source,
+      networkShared: sql<boolean>`exists (select 1 from ${networkPropertyListings} nl where nl.property_id = ${properties.id} and nl.status = 'publicada')`,
       deals: sql<number>`(select count(*)::int from ${dealProperties} dp where dp.property_id = ${properties.id})`,
       visits: sql<number>`(select count(*)::int from ${visits} v where v.property_id = ${properties.id})`,
     })

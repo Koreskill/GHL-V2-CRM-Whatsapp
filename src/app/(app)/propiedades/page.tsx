@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, Building2, Plus, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, Building2, Lock, LockOpen, Plus, RefreshCw, Search } from "lucide-react";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { requireOrgId } from "@/lib/auth";
 import { formatListDate } from "@/lib/format";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { PropertyCover } from "@/components/properties/property-cover";
 import { SheetCheck, SheetRequirements } from "@/components/properties/sheet-help";
 import { formatMoney, placeLine, summaryParts, tidyName } from "@/lib/properties/organize";
+import { PROPERTY_STATUSES, statusLabel, statusTone } from "@/lib/properties/status";
 import { analyzeOwnSheet, syncOwnProperties } from "./actions";
 
 export const metadata = { title: "Propiedades · Setter CRM" };
@@ -18,16 +19,7 @@ const OPERATIONS = [
   { id: "temporario", label: "Temporario" },
 ];
 const TYPES = ["departamento", "casa", "ph", "terreno", "local", "oficina", "cochera", "otro"];
-const STATUSES = ["disponible", "reservada", "vendida", "alquilada", "pausada", "borrador"];
-
-const STATUS_TONE: Record<string, string> = {
-  disponible: "bg-accent-green/12 text-accent-green",
-  reservada: "bg-accent-amber/12 text-accent-amber",
-  vendida: "bg-field text-muted",
-  alquilada: "bg-field text-muted",
-  pausada: "bg-field text-muted",
-  borrador: "bg-field text-muted",
-};
+const STATUSES: readonly string[] = PROPERTY_STATUSES;
 
 const money = (v: number | null, c: string) => formatMoney(v, c) ?? "Sin precio";
 
@@ -202,11 +194,11 @@ export default async function PropiedadesPage({ searchParams }: PageProps<"/prop
 
         <div className="flex flex-wrap gap-1.5">
           <Chip href={qs(filters, { estado: undefined })} active={!filters.status}>
-            Todo estado
+            Vigentes
           </Chip>
           {STATUSES.map((s) => (
             <Chip key={s} href={qs(filters, { estado: s })} active={filters.status === s}>
-              {s}
+              {statusLabel(s)}
             </Chip>
           ))}
         </div>
@@ -241,20 +233,37 @@ export default async function PropiedadesPage({ searchParams }: PageProps<"/prop
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {items.map((p) => (
             <Link key={p.id} href={`/propiedades/${p.id}`}>
-              <Card className="flex h-full flex-col overflow-hidden transition-colors hover:border-primary/40">
+              <Card
+                className={cn(
+                  "flex h-full flex-col overflow-hidden transition-colors",
+                  p.networkShared
+                    ? "border-accent-green/50 bg-accent-green/5 hover:border-accent-green"
+                    : "border-accent-red/40 bg-accent-red/5 hover:border-accent-red/70",
+                )}
+              >
                 <PropertyCover src={p.coverUrl}>
                   <span
                     className={cn(
-                      "absolute left-2.5 top-2.5 rounded-md px-2 py-0.5 text-[11.5px] font-medium",
-                      STATUS_TONE[p.status] ?? "bg-field text-muted",
+                      "absolute left-2.5 top-2.5 rounded-md px-2 py-0.5 text-[11.5px] font-semibold backdrop-blur-sm",
+                      statusTone(p.status),
                     )}
                   >
-                    {p.status}
+                    {statusLabel(p.status)}
+                  </span>
+                  <span
+                    title={p.networkShared ? "Se muestra en la red" : "No se muestra en la red"}
+                    className={cn(
+                      "absolute right-2.5 top-2.5 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11.5px] font-semibold text-white",
+                      p.networkShared ? "bg-accent-green" : "bg-accent-red",
+                    )}
+                  >
+                    {p.networkShared ? <LockOpen className="size-3" strokeWidth={2.2} /> : <Lock className="size-3" strokeWidth={2.2} />}
+                    {p.networkShared ? "En la red" : "Fuera de la red"}
                   </span>
                   {p.syncIssues.length > 0 && (
                     <span
                       title={p.syncIssues.join(" · ")}
-                      className="absolute right-2.5 top-2.5 inline-flex items-center gap-1 rounded-md bg-accent-amber/90 px-2 py-0.5 text-[11.5px] font-medium text-white"
+                      className="absolute bottom-2.5 left-2.5 inline-flex items-center gap-1 rounded-md bg-accent-amber/90 px-2 py-0.5 text-[11.5px] font-medium text-white"
                     >
                       <AlertTriangle className="size-3" strokeWidth={2} />
                       {p.syncIssues.length}

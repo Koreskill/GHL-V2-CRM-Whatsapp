@@ -143,7 +143,7 @@ export function SheetRequirements({ defaultOpen = false }: { defaultOpen?: boole
         <li>Barrio y localidad completos: con eso el agente busca y compara propiedades.</li>
         <li>Superficies, dormitorios, baños y cocheras como números.</li>
         <li>La portada y el enlace del aviso como <strong className="text-ink">enlaces https</strong>. Una imagen pegada dentro de la celda no sirve.</li>
-        <li>Estado: disponible, reservada, vendida, alquilada o pausada. Vacío se toma como disponible.</li>
+        <li>Estado: disponible, reservada, señada, vendida, alquilada o pausada. Vacío se toma como disponible.</li>
         <li>Si sacás una propiedad de la hoja, en el CRM queda <strong className="text-ink">pausada</strong> (no se borra: conserva su historial).</li>
         <li>La hoja tiene que ser pública o estar compartida con la cuenta de servicio de la plataforma.</li>
         <li>El CRM <strong className="text-ink">no completa datos por su cuenta</strong>: lo que falta o viene mal queda señalado en la ficha de cada propiedad.</li>
