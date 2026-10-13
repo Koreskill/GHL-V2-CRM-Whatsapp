@@ -14,7 +14,7 @@
     "db:counts": "tsx scripts/db-counts.ts",
     "zernio:openapi": "node scripts/zernio-openapi.mjs && openapi-typescript openapi/zernio.slim.json -o src/lib/zernio/openapi.d.ts",
     "zernio:check": "tsx scripts/zernio-check.ts",
-    "test": "tsx scripts/test-safe-redirect.ts && tsx scripts/test-availability.ts && tsx scripts/test-sheet-columns.ts && tsx scripts/test-organize.ts && tsx scripts/test-scoring.ts && tsx scripts/test-news.ts && tsx scripts/test-publications.ts && tsx scripts/test-signature.ts && tsx scripts/test-units.ts && tsx scripts/test-catalog.ts && tsx scripts/test-triage.ts && tsx scripts/test-conversational.ts",
+    "test": "tsx scripts/test-safe-redirect.ts && tsx scripts/test-availability.ts && tsx scripts/test-sheet-columns.ts && tsx scripts/test-organize.ts && tsx scripts/test-request-origin.ts && tsx scripts/test-scoring.ts && tsx scripts/test-news.ts && tsx scripts/test-publications.ts && tsx scripts/test-signature.ts && tsx scripts/test-units.ts && tsx scripts/test-catalog.ts && tsx scripts/test-triage.ts && tsx scripts/test-conversational.ts",
     "test:db": "tsx scripts/test-tags.ts && tsx scripts/test-deals.ts && tsx scripts/test-visits.ts && tsx scripts/test-sync.ts && tsx scripts/test-triage-db.ts && tsx scripts/test-archive-db.ts && tsx scripts/test-scoring-db.ts && tsx scripts/test-news-db.ts && tsx scripts/test-lab-sandbox.ts",
     "test:all": "npm test && npm run test:db",
     "zernio:webhook": "tsx scripts/zernio-webhook.ts",
