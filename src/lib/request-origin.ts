@@ -2,12 +2,28 @@
 // una URL fija mal puesta rompe los callbacks sin ningún error visible.
 // Con ALLOWED_HOSTS definida, un Host / X-Forwarded-Host que no figure en la lista se ignora: los callbacks
 // de OAuth y la dirección de las notificaciones push de Google no pueden apuntar a un dominio ajeno.
+/**
+ * ALLOWED_HOSTS se carga a mano en el panel: se acepta "dominio.com", "https://dominio.com/" o "https//dominio.com/"
+ * y todo queda en "dominio.com". Un error de tipeo ahí no puede romper el login.
+ */
+export function normalizeHost(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?(?::\/\/|\/\/|:\/)/, "")
+    .replace(/[/?#].*$/, "");
+}
+
+function allowedHostList() {
+  return (process.env.ALLOWED_HOSTS ?? "").split(",").map(normalizeHost).filter(Boolean);
+}
+
 export function requestOrigin(req: Request) {
   const url = new URL(req.url);
   const host = req.headers.get("x-forwarded-host")?.split(",")[0].trim() || req.headers.get("host") || url.host;
   const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim() || url.protocol.replace(":", "");
   if (!hostAllowed(host)) {
-    const first = (process.env.ALLOWED_HOSTS ?? "").split(",")[0]?.trim();
+    const first = allowedHostList()[0];
     if (first) return `https://${first}`;
   }
   return `${proto === "http" && !host.startsWith("localhost") && !host.startsWith("127.") ? "https" : proto}://${host}`;
@@ -25,7 +41,7 @@ export function originFromHeaders(h: Headers) {
 // (recuperación, invitaciones). Sin ella el host sale del request, como siempre. Con ella, un
 // header Host / X-Forwarded-Host falsificado no puede hacer que el correo apunte a un dominio ajeno.
 export function hostAllowed(host: string) {
-  const list = (process.env.ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  const list = allowedHostList();
   return list.length === 0 || list.includes(host.toLowerCase());
 }
 
@@ -36,6 +52,6 @@ export function trustedOriginFromHeaders(h: Headers) {
   if (!origin) return "";
   const host = new URL(origin).host;
   if (hostAllowed(host)) return origin;
-  const first = (process.env.ALLOWED_HOSTS ?? "").split(",")[0]?.trim();
+  const first = allowedHostList()[0];
   return first ? `https://${first}` : "";
 }

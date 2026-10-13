@@ -4,6 +4,7 @@ import { Bath, BedDouble, Car, MapPin, MessageCircle, Play, Ruler, Rotate3d } fr
 import { getSession } from "@/lib/auth";
 import { COWIN_BRAND, brandHex, isSlug, publicImages, publicLocation } from "@/lib/publications/logic";
 import { countView, getPublicListing } from "@/lib/publications/queries";
+import { PropertyCover } from "@/components/properties/property-cover";
 
 // Ficha pública: sin login, sin app shell. Todo lo que se ve sale de getPublicListing (solo campos comerciales).
 export const dynamic = "force-dynamic";
@@ -80,12 +81,7 @@ export default async function PublicPropertyPage({ params, searchParams }: PageP
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
           <div className="min-w-0">
-            <div className="aspect-[16/10] overflow-hidden rounded-2xl bg-field">
-              {images[0] && (
-                // eslint-disable-next-line @next/next/no-img-element -- fotos en dominios https arbitrarios
-                <img src={images[0]} alt={title} className="size-full object-cover" />
-              )}
-            </div>
+            <PropertyCover src={images[0] ?? null} alt={title} className="rounded-2xl" />
             {images.length > 1 && (
               <ul className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-6">
                 {images.slice(1, 13).map((url) => (

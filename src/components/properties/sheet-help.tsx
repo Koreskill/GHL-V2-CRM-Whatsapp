@@ -123,11 +123,12 @@ export function SheetCheck({ action, orgId }: { action: (prev: AnalyzeState, for
 const ORDER: Field[] = ["externalId", "operation", "propertyType", "title", "priceSale", "priceRent", "zone", "city", "coverUrl", "sourceUrl", "status", "bedrooms", "bathrooms", "parking", "areaM2"];
 
 /** Lo que conviene seguir al armar la hoja. Va debajo de donde se carga. */
-export function SheetRequirements() {
+export function SheetRequirements({ defaultOpen = false }: { defaultOpen?: boolean }) {
   return (
-    <details className="mt-4 border-t border-line pt-4 text-[13px]" open>
+    <details className="mt-4 border-t border-line pt-4 text-[13px]" open={defaultOpen}>
       <summary className="flex cursor-pointer items-center gap-2 font-medium text-ink">
         <ListChecks className="size-4 text-muted" strokeWidth={1.7} /> Requisitos recomendados para la hoja
+        <span className="text-[12px] font-normal text-muted">· tocá para ver o ocultar</span>
       </summary>
 
       <ul className="mt-3 flex list-disc flex-col gap-1.5 pl-5 text-muted marker:text-line">
@@ -142,7 +143,7 @@ export function SheetRequirements() {
         <li>Barrio y localidad completos: con eso el agente busca y compara propiedades.</li>
         <li>Superficies, dormitorios, baños y cocheras como números.</li>
         <li>La portada y el enlace del aviso como <strong className="text-ink">enlaces https</strong>. Una imagen pegada dentro de la celda no sirve.</li>
-        <li>Estado: disponible, reservada, vendida, alquilada o pausada. Vacío se toma como disponible.</li>
+        <li>Estado: disponible, reservada, señada, vendida, alquilada o pausada. Vacío se toma como disponible.</li>
         <li>Si sacás una propiedad de la hoja, en el CRM queda <strong className="text-ink">pausada</strong> (no se borra: conserva su historial).</li>
         <li>La hoja tiene que ser pública o estar compartida con la cuenta de servicio de la plataforma.</li>
         <li>El CRM <strong className="text-ink">no completa datos por su cuenta</strong>: lo que falta o viene mal queda señalado en la ficha de cada propiedad.</li>

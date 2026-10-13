@@ -1,0 +1,1 @@
+ALTER TYPE "public"."property_status" ADD VALUE 'senada' BEFORE 'vendida';

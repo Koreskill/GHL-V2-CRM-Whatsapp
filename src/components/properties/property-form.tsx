@@ -141,8 +141,9 @@ export function PropertyForm({ values, fromSheet }: { values: PropertyFormValues
             Estado
           </label>
           <select id="status" name="status" defaultValue={values.status ?? "disponible"} className={input}>
-            <option value="disponible">Disponible</option>
+            <option value="disponible">Activa</option>
             <option value="reservada">Reservada</option>
+            <option value="senada">Señada</option>
             <option value="vendida">Vendida</option>
             <option value="alquilada">Alquilada</option>
             <option value="pausada">Pausada</option>

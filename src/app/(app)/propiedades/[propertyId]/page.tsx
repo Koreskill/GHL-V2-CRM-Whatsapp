@@ -16,6 +16,9 @@ import { PublishPanel } from "@/components/properties/publish-panel";
 import { publishBlockers, resolveBranding } from "@/lib/publications/logic";
 import { getOrgBranding, getPublication } from "@/lib/publications/queries";
 import { InterestedList } from "@/components/properties/interested-list";
+import { PropertyCover } from "@/components/properties/property-cover";
+import { organizeProperty, type MediaLink } from "@/lib/properties/organize";
+import { statusTone } from "@/lib/properties/status";
 import { VISIT_LABEL, VISIT_TONE } from "@/components/visits/visit-card";
 import { Card, PageHeader } from "@/components/ui/primitives";
 import { isUuid } from "@/lib/api";
@@ -26,14 +29,7 @@ import { resyncProperty } from "../actions";
 import { listVisitsByProperty } from "@/lib/visits/queries";
 import { cn } from "@/lib/utils";
 
-const STATUS_TONE: Record<string, string> = {
-  disponible: "bg-accent-green/12 text-accent-green",
-  reservada: "bg-accent-amber/12 text-accent-amber",
-  vendida: "bg-field text-muted",
-  alquilada: "bg-field text-muted",
-  pausada: "bg-field text-muted",
-  borrador: "bg-field text-muted",
-};
+const LINK_ICON: Record<MediaLink["kind"], typeof Play> = { video: Play, tour: Rotate3d, mapa: MapPin, aviso: ExternalLink };
 
 function Dato({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -65,16 +61,15 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
   ]);
   const pubFlag = typeof sp.pub === "string" ? sp.pub : null;
 
-  const price =
-    property.price === null
-      ? null
-      : `${property.currency} ${property.price.toLocaleString("es-AR", { maximumFractionDigits: 0 })}`;
+  // Toda la presentación sale del organizador: mismos bloques, mismo orden y textos prolijos en cada propiedad.
+  const org = organizeProperty(property);
+  const price = org.priceLabel;
 
   return (
     <>
       <PageHeader
-        title={property.title ?? "Sin título"}
-        subtitle={`${property.operation} · ${property.propertyType}${property.zone ? ` · ${property.zone}` : ""}${property.city ? `, ${property.city}` : ""}`}
+        title={org.title}
+        subtitle={org.subtitle}
         actions={
           <>
             <Link
@@ -152,80 +147,60 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-5">
           <Card className="overflow-hidden">
-            <div className="aspect-[16/9] w-full bg-field">
-              {property.coverUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element -- las fotos viven en dominios arbitrarios de la hoja
-                <img src={property.coverUrl} alt="" className="size-full object-cover" />
-              ) : (
-                <span className="grid size-full place-items-center text-[13px] text-muted">Sin portada</span>
-              )}
-            </div>
+            <PropertyCover src={org.media.cover} />
 
-            {property.galleryUrls.length > 0 && (
+            {org.media.gallery.length > 0 && (
               <div className="flex gap-2 overflow-x-auto p-3">
-                {property.galleryUrls.map((url) => (
+                {org.media.gallery.map((url) => (
                   // eslint-disable-next-line @next/next/no-img-element -- ídem portada
                   <img
                     key={url}
                     src={url}
                     alt=""
                     loading="lazy"
-                    className="h-20 w-28 shrink-0 rounded-lg object-cover"
+                    referrerPolicy="no-referrer"
+                    className="h-20 w-28 shrink-0 rounded-lg bg-field object-cover"
                   />
                 ))}
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2 border-t border-line px-4 py-3">
-              {property.videoUrl && (
-                <a
-                  href={property.videoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-[12.5px] font-medium text-ink hover:bg-field"
-                >
-                  <Play className="size-3.5" strokeWidth={1.8} /> Video
-                </a>
-              )}
-              {property.tour360Url && (
-                <a
-                  href={property.tour360Url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-[12.5px] font-medium text-ink hover:bg-field"
-                >
-                  <Rotate3d className="size-3.5" strokeWidth={1.8} /> Tour 360°
-                </a>
-              )}
-              {property.mapUrl && (
-                <a
-                  href={property.mapUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-[12.5px] font-medium text-ink hover:bg-field"
-                >
-                  <MapPin className="size-3.5" strokeWidth={1.8} /> Ubicación
-                </a>
-              )}
-              {property.sourceUrl && (
-                <a
-                  href={property.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-[12.5px] font-medium text-ink hover:bg-field"
-                >
-                  <ExternalLink className="size-3.5" strokeWidth={1.8} /> Aviso original
-                </a>
-              )}
-            </div>
+            {org.media.links.length > 0 && (
+              <div className="flex flex-wrap gap-2 border-t border-line px-4 py-3">
+                {org.media.links.map((l) => {
+                  const Icon = LINK_ICON[l.kind];
+                  return (
+                    <a
+                      key={l.kind}
+                      href={l.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-card px-2.5 text-[12.5px] font-medium text-ink hover:bg-field"
+                    >
+                      <Icon className="size-3.5" strokeWidth={1.8} /> {l.label}
+                    </a>
+                  );
+                })}
+              </div>
+            )}
           </Card>
 
-          {property.description && (
+          {org.description.length > 0 && (
             <Card className="p-5">
               <h2 className="text-[15px] font-semibold text-ink">Descripción</h2>
-              <p className="mt-2 text-[13.5px] leading-relaxed whitespace-pre-wrap text-ink">
-                {property.description}
-              </p>
+              <div className="mt-2 flex flex-col gap-3 text-[13.5px] leading-relaxed text-ink">
+                {org.description.map((block, i) =>
+                  block.kind === "paragraph" ? (
+                    <p key={i}>{block.text}</p>
+                  ) : (
+                    <ul key={i} className="list-disc pl-5 marker:text-muted">
+                      {block.items.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ),
+                )}
+              </div>
             </Card>
           )}
 
@@ -277,32 +252,32 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
               <span
                 className={cn(
                   "rounded-md px-2 py-0.5 text-[11.5px] font-medium",
-                  STATUS_TONE[property.status] ?? "bg-field text-muted",
+                  statusTone(property.status),
                 )}
               >
-                {property.status}
+                {org.statusLabel}
               </span>
             </div>
 
-            <dl className="mt-3 divide-y divide-line border-t border-line pt-1">
-              <Dato label="Operación" value={property.operation} />
-              <Dato label="Tipo" value={property.propertyType} />
-              <Dato label="Dormitorios" value={property.bedrooms} />
-              <Dato label="Baños" value={property.bathrooms} />
-              <Dato label="Cocheras" value={property.parking} />
-              <Dato label="Superficie total" value={property.areaM2 ? `${property.areaM2} m²` : null} />
-              <Dato label="Superficie cubierta" value={property.areaCoveredM2 ? `${property.areaCoveredM2} m²` : null} />
-              <Dato label="Dirección" value={property.addressPublic} />
-              <Dato label="Barrio" value={property.zone} />
-              <Dato label="Ciudad" value={property.city} />
-            </dl>
+            <div className="mt-3 flex flex-col gap-4 border-t border-line pt-3">
+              {org.sections.map((section) => (
+                <div key={section.id}>
+                  <h3 className="text-[11px] font-semibold tracking-wider text-muted uppercase">{section.title}</h3>
+                  <dl className="mt-1 divide-y divide-line">
+                    {section.facts.map((f) => (
+                      <Dato key={f.label} label={f.label} value={f.empty ? null : f.value} />
+                    ))}
+                  </dl>
+                </div>
+              ))}
+            </div>
           </Card>
 
-          {property.amenities.length > 0 && (
+          {org.amenities.length > 0 && (
             <Card className="p-5">
               <h2 className="text-[15px] font-semibold text-ink">Amenities</h2>
               <div className="mt-2.5 flex flex-wrap gap-1.5">
-                {property.amenities.map((a) => (
+                {org.amenities.map((a) => (
                   <span key={a} className="rounded-full bg-field px-2.5 py-1 text-[12.5px] text-ink">
                     {a}
                   </span>
