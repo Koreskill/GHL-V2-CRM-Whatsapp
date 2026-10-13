@@ -1,3 +1,5 @@
+import { statusLabel } from "./status";
+
 // Organizador de datos de una propiedad. Función PURA: recibe lo que vino de la base (o de la hoja) y devuelve
 // SIEMPRE la misma estructura (mismas secciones, mismas filas, mismo orden), con los textos prolijos.
 //
@@ -183,7 +185,7 @@ export function organizeProperty(p: PropertyInput): OrganizedProperty {
     {
       id: "resumen",
       title: "Resumen",
-      facts: [fact("Operación", cap(p.operation)), fact("Tipo", cap(p.propertyType)), fact("Estado", cap(p.status))],
+      facts: [fact("Operación", cap(p.operation)), fact("Tipo", cap(p.propertyType)), fact("Estado", statusLabel(p.status))],
     },
     {
       id: "caracteristicas",
@@ -231,7 +233,7 @@ export function organizeProperty(p: PropertyInput): OrganizedProperty {
     title,
     subtitle: [`${cap(p.operation)} · ${cap(p.propertyType)}`, place].filter(Boolean).join(" · "),
     priceLabel,
-    statusLabel: cap(p.status),
+    statusLabel: statusLabel(p.status),
     sections,
     amenities: organizeAmenities(p.amenities),
     description: organizeDescription(p.description),

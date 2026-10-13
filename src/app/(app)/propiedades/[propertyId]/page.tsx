@@ -18,6 +18,7 @@ import { getOrgBranding, getPublication } from "@/lib/publications/queries";
 import { InterestedList } from "@/components/properties/interested-list";
 import { PropertyCover } from "@/components/properties/property-cover";
 import { organizeProperty, type MediaLink } from "@/lib/properties/organize";
+import { statusTone } from "@/lib/properties/status";
 import { VISIT_LABEL, VISIT_TONE } from "@/components/visits/visit-card";
 import { Card, PageHeader } from "@/components/ui/primitives";
 import { isUuid } from "@/lib/api";
@@ -27,15 +28,6 @@ import { getProperty, listPropertyInterest } from "@/lib/properties/catalog";
 import { resyncProperty } from "../actions";
 import { listVisitsByProperty } from "@/lib/visits/queries";
 import { cn } from "@/lib/utils";
-
-const STATUS_TONE: Record<string, string> = {
-  disponible: "bg-accent-green/12 text-accent-green",
-  reservada: "bg-accent-amber/12 text-accent-amber",
-  vendida: "bg-field text-muted",
-  alquilada: "bg-field text-muted",
-  pausada: "bg-field text-muted",
-  borrador: "bg-field text-muted",
-};
 
 const LINK_ICON: Record<MediaLink["kind"], typeof Play> = { video: Play, tour: Rotate3d, mapa: MapPin, aviso: ExternalLink };
 
@@ -260,7 +252,7 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
               <span
                 className={cn(
                   "rounded-md px-2 py-0.5 text-[11.5px] font-medium",
-                  STATUS_TONE[property.status] ?? "bg-field text-muted",
+                  statusTone(property.status),
                 )}
               >
                 {org.statusLabel}

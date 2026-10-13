@@ -84,3 +84,19 @@ assert.equal(sparse.sections[1].facts[0].value, "—");
 assert.equal(organizeProperty({ ...base, title: null }).title, "Sin título");
 
 console.log("organize: OK");
+
+// Estados: "disponible" se ve como "Activa"; "senada" existe y no se ofrece a un cliente.
+import { OFFERABLE_PROPERTY_STATUSES, PROPERTY_STATUSES, statusLabel, statusTone } from "../src/lib/properties/status";
+import { parseStatus } from "../src/lib/sheets/columns";
+assert.equal(statusLabel("disponible"), "Activa");
+assert.equal(statusLabel("reservada"), "Reservada");
+assert.equal(statusLabel("senada"), "Señada");
+assert.equal(statusLabel("algo-raro"), "algo-raro");
+assert.ok(PROPERTY_STATUSES.includes("senada"));
+assert.ok(!(OFFERABLE_PROPERTY_STATUSES as readonly string[]).includes("senada"));
+assert.notEqual(statusTone("senada"), statusTone("disponible"));
+assert.equal(organizeProperty({ ...base, status: "senada" }).statusLabel, "Señada");
+assert.equal(organizeProperty({ ...base, status: "disponible" }).sections[0].facts[2].value, "Activa");
+for (const raw of ["Señada", "señado", "SEÑA", "con seña", "Seña pagada"]) assert.equal(parseStatus(raw), "senada", raw);
+assert.equal(parseStatus("Reservada"), "reservada");
+console.log("estados: OK");

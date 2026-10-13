@@ -10,7 +10,7 @@ import { authorizeAction } from "@/lib/deals/guard";
 
 const OPERATIONS = new Set(["venta", "alquiler", "temporario"]);
 const TYPES = new Set(["departamento", "casa", "ph", "terreno", "local", "oficina", "cochera", "otro"]);
-const STATUSES = new Set(["borrador", "disponible", "reservada", "vendida", "alquilada", "pausada"]);
+const STATUSES = new Set(["borrador", "disponible", "reservada", "senada", "vendida", "alquilada", "pausada"]);
 
 const text = (form: FormData, key: string, max = 300) => String(form.get(key) ?? "").trim().slice(0, max);
 
