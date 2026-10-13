@@ -123,11 +123,12 @@ export function SheetCheck({ action, orgId }: { action: (prev: AnalyzeState, for
 const ORDER: Field[] = ["externalId", "operation", "propertyType", "title", "priceSale", "priceRent", "zone", "city", "coverUrl", "sourceUrl", "status", "bedrooms", "bathrooms", "parking", "areaM2"];
 
 /** Lo que conviene seguir al armar la hoja. Va debajo de donde se carga. */
-export function SheetRequirements() {
+export function SheetRequirements({ defaultOpen = false }: { defaultOpen?: boolean }) {
   return (
-    <details className="mt-4 border-t border-line pt-4 text-[13px]" open>
+    <details className="mt-4 border-t border-line pt-4 text-[13px]" open={defaultOpen}>
       <summary className="flex cursor-pointer items-center gap-2 font-medium text-ink">
         <ListChecks className="size-4 text-muted" strokeWidth={1.7} /> Requisitos recomendados para la hoja
+        <span className="text-[12px] font-normal text-muted">· tocá para ver o ocultar</span>
       </summary>
 
       <ul className="mt-3 flex list-disc flex-col gap-1.5 pl-5 text-muted marker:text-line">
