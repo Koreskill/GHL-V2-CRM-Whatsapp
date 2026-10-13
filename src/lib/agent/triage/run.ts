@@ -84,6 +84,22 @@ async function claim(input: { organizationId: string; conversationId: string; me
     .values({ ...input, status: "error", error: "en proceso" })
     .onConflictDoNothing({ target: messageTriage.messageId })
     .returning({ id: messageTriage.id });
+  if (row) {
+    // Un mensaje nuevo del cliente deja obsoleto cualquier borrador anterior de ese hilo: respondía a
+    // otra cosa y mandarlo sería contestar fuera de contexto.
+    await getDb()
+      .update(messageTriage)
+      .set({ status: "descartado", decision: "ignore", reviewAction: "obsoleto", updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(messageTriage.conversationId, input.conversationId),
+          eq(messageTriage.organizationId, input.organizationId),
+          eq(messageTriage.status, "borrador"),
+          ne(messageTriage.id, row.id),
+        ),
+      )
+      .catch(() => {});
+  }
   return row?.id ?? null;
 }
 
@@ -96,10 +112,19 @@ async function pauseAi(conversationId: string, orgId: string) {
     .catch(() => {});
 }
 
+// Decisión tipada que corresponde a cada resultado: nada sale sin pasar por una de estas cuatro.
+const DECISION: Record<string, "send" | "draft" | "handoff" | "ignore"> = {
+  enviado: "send",
+  borrador: "draft",
+  derivado: "handoff",
+  descartado: "ignore",
+};
+
 async function finish(triageId: string, patch: Record<string, unknown>) {
+  const decision = typeof patch.status === "string" ? DECISION[patch.status] : undefined;
   await getDb()
     .update(messageTriage)
-    .set({ ...patch, updatedAt: sql`now()` })
+    .set({ ...patch, ...(decision ? { decision } : {}), updatedAt: sql`now()` })
     .where(eq(messageTriage.id, triageId))
     .catch(() => {});
 }
@@ -320,6 +345,7 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
         await deliverMessage(conversationId, {
           text: "Recibimos tu mensaje. En breve te responde una persona del equipo.",
           source: "agent",
+          organizationId: conv.organizationId,
         });
       }
       return { status: "error", triageId };
@@ -334,12 +360,27 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
     if (composed.disposition === "derivar") {
       let ackId: string | null = null;
       if (policy.autoReply === "auto" && composed.text) {
-        const ack = await deliverMessage(conversationId, { text: composed.text, source: "agent" });
+        const ack = await deliverMessage(conversationId, { text: composed.text, source: "agent", organizationId: conv.organizationId });
         if (ack.ok) ackId = ack.message.id;
       }
       await finish(triageId, { ...record, status: "derivado", sentMessageId: ackId, error: null });
       await pauseAi(conversationId, conv.organizationId);
       return { status: "derivado", triageId, route, intent };
+    }
+
+    // ── Política de baja confianza (OPE-005 §7) ──
+    // Una pregunta de aclaración nacida de la duda del clasificador, o un texto armado por código
+    // porque el modelo falló o inventó datos, NUNCA salen solos: quedan de borrador para una persona.
+    const needsReview =
+      route === "aclaracion" || (composed.source === "determinista" && composed.disposition === "responder");
+    if (needsReview && policy.autoReply === "auto" && composed.text) {
+      await finish(triageId, {
+        ...record,
+        status: "borrador",
+        routeReason: route === "aclaracion" ? "Confianza baja: lo revisa una persona antes de responder" : "El modelo no pudo redactar con datos verificados: lo revisa una persona",
+        error: null,
+      });
+      return { status: "borrador", triageId, route, intent };
     }
 
     // ── Respuesta ──
@@ -360,7 +401,7 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
       return { status: "borrador", triageId, route, intent };
     }
 
-    const sent = await deliverMessage(conversationId, { text: composed.text, source: "agent" });
+    const sent = await deliverMessage(conversationId, { text: composed.text, source: "agent", organizationId: conv.organizationId });
     if (!sent.ok) {
       await finish(triageId, { ...record, status: "borrador", error: sent.error });
       await reportIncident({

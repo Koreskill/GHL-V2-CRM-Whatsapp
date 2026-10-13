@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, Plus, Trash2 } from "lucide-react";
-import { addClientUser, removeClientUser, resetClientPassword } from "@/app/(app)/agencia/actions";
+import { KeyRound, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { addClientUser, removeClientUser, resetClientPassword, setMemberSuspendedAction } from "@/app/(app)/agencia/actions";
 import { PasswordField } from "@/components/ui/password-field";
 import type { ClientUser } from "@/lib/agency/users";
 import { formatListDate } from "@/lib/format";
@@ -41,7 +41,7 @@ export function AgencyUsersPanel({
                   <span className="block text-[12px] text-muted">
                     {u.role === "admin" ? "Administrador" : u.role === "agent" ? "Agente" : "Sin rol"}
                     {" · "}
-                    {u.lastSignInAt ? `entró ${formatListDate(u.lastSignInAt)}` : "nunca entró"}
+                    {u.suspended ? "SUSPENDIDO · " : ""}{u.lastSignInAt ? `entró ${formatListDate(u.lastSignInAt)}` : "nunca entró"}
                   </span>
                 </span>
                 <button
@@ -53,12 +53,26 @@ export function AgencyUsersPanel({
                   <KeyRound className="size-4" strokeWidth={1.7} />
                 </button>
                 {u.id !== currentUserId && (
+                  <form action={setMemberSuspendedAction}>
+                    <input type="hidden" name="organizationId" value={orgId} />
+                    <input type="hidden" name="userId" value={u.id} />
+                    <input type="hidden" name="suspend" value={u.suspended ? "0" : "1"} />
+                    <button
+                      type="submit"
+                      title={u.suspended ? "Reactivar" : "Suspender acceso"}
+                      className="grid size-8 place-items-center rounded-md text-muted hover:bg-field hover:text-ink"
+                    >
+                      {u.suspended ? <Play className="size-4" strokeWidth={1.7} /> : <Pause className="size-4" strokeWidth={1.7} />}
+                    </button>
+                  </form>
+                )}
+                {u.id !== currentUserId && (
                   <form action={removeClientUser}>
                     <input type="hidden" name="organizationId" value={orgId} />
                     <input type="hidden" name="userId" value={u.id} />
                     <button
                       type="submit"
-                      title="Eliminar usuario"
+                      title="Dar de baja de la inmobiliaria"
                       className="grid size-8 place-items-center rounded-md text-muted hover:bg-accent-red/10 hover:text-accent-red"
                     >
                       <Trash2 className="size-4" strokeWidth={1.7} />

@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import { AlertTriangle, CheckCircle2, Home, RefreshCw } from "lucide-react";
 import { saveSheetConfig, syncClientProperties } from "@/app/(app)/agencia/actions";
+import { SheetCheck, SheetRequirements } from "@/components/properties/sheet-help";
 import { Card } from "@/components/ui/primitives";
+import { analyzeClientSheet } from "@/app/(app)/agencia/actions";
 import { formatListDate } from "@/lib/format";
 
 type Sheet = {
@@ -124,6 +126,9 @@ export function ClientSheetPanel({
             </button>
           </form>
         )}
+
+        {sheet && !editing && <SheetCheck action={analyzeClientSheet} orgId={orgId} />}
+        <SheetRequirements />
       </div>
     </Card>
   );

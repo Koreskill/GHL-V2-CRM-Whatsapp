@@ -205,7 +205,7 @@ async function main() {
         assert.equal(stats.confianzaMedia, 0.82);
 
         // Atenderlo lo saca de pendientes pero conserva la clasificación para recalibrar.
-        await resolveTriage(primero[0].id, org.id);
+        await resolveTriage(primero[0].id, org.id, "00000000-0000-0000-0000-0000000000aa");
         assert.equal(await countPendingTriage(org.id), 0);
         assert.equal((await getLatestTriage(conv.id, org.id))?.intent, "buy", "la clasificación no se borra");
 

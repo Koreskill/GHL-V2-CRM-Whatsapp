@@ -167,9 +167,51 @@ export const organizationMembers = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     role: memberRoleEnum("role").notNull().default("agente"),
+    // pending | active | suspended | revoked. Un miembro suspendido conserva su historial y su autoría.
+    status: text("status").notNull().default("active"),
     ...timestamps,
   },
   (t) => [uniqueIndex("organization_members_user_org_key").on(t.userId, t.organizationId)],
+);
+
+// Quien entra con Google sin invitación queda acá: una identidad sin organización ni rol.
+// No concede acceso a nada: un administrador de agencia la aprueba (le asigna inmobiliaria y rol)
+// o la rechaza. `user_id` apunta a auth.users sin FK (otro esquema, crm_app no lo toca).
+export const accessRequests = pgTable(
+  "access_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull(),
+    email: text("email").notNull(),
+    fullName: text("full_name"),
+    provider: text("provider").notNull().default("google"),
+    status: text("status").notNull().default("pending"), // pending | approved | rejected
+    decidedBy: uuid("decided_by"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("access_requests_user_key").on(t.userId), index("access_requests_status_idx").on(t.status, t.createdAt)],
+);
+
+// Invitaciones: el token se entrega UNA vez (en el enlace) y acá solo queda su hash sha256.
+export const invitations = pgTable(
+  "invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(), // normalizado en minúsculas
+    role: memberRoleEnum("role").notNull().default("agente"),
+    tokenHash: text("token_hash").notNull(),
+    status: text("status").notNull().default("pending"), // pending | accepted | revoked
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    invitedBy: uuid("invited_by").notNull(),
+    acceptedBy: uuid("accepted_by"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("invitations_token_hash_key").on(t.tokenHash), index("invitations_org_status_idx").on(t.organizationId, t.status)],
 );
 
 // Auditoría del plano de control de la agencia (cambios de contexto, cambios sensibles).
@@ -771,6 +813,9 @@ export const visits = pgTable(
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     assignedUserId: uuid("assigned_user_id"),
+    // Fin de la visita agendada con el calendario interno. Junto con assigned_user_id y scheduled_at alimenta
+    // la restricción de exclusión (migración 0022): un asesor no puede tener dos visitas que se pisen.
+    endsAt: timestamp("ends_at", { withTimezone: true }),
     // Nota de seguimiento que se carga después de la cita.
     notes: text("notes"),
     cancelReason: text("cancel_reason"),
@@ -926,6 +971,12 @@ export const messageTriage = pgTable(
     sentMessageId: uuid("sent_message_id").references(() => messages.id, { onDelete: "set null" }),
     // Cuándo lo vio alguien del equipo. Null = sin ver; es lo que cuenta la campanita.
     seenAt: timestamp("seen_at", { withTimezone: true }),
+    // Decisión tipada del agente: send | draft | handoff | ignore. Sale del estado, pero queda explícita.
+    decision: text("decision"),
+    // Revisión humana de un borrador: aprobado | editado | rechazado | obsoleto. Quién y cuándo.
+    reviewAction: text("review_action"),
+    reviewedBy: uuid("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     error: text("error"), // sin claves ni datos personales: safeError()
     ...timestamps,
   },
@@ -1292,3 +1343,277 @@ export const leadPropertyScoreHistory = pgTable(
   },
   (t) => [index("lead_property_score_history_conv_idx").on(t.conversationId, t.createdAt)],
 );
+
+
+// ─── Laboratorio por inmobiliaria (OPE-005 fase 3) ──────────────────────────
+// Corridas de conversaciones simuladas contra el agente real. NO son datos comerciales: una corrida nunca
+// crea contactos, oportunidades ni visitas reales (se ejecuta en una transacción que se revierte).
+
+export const labRuns = pgTable(
+  "lab_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").notNull(),
+    status: text("status").notNull().default("queued"), // queued | running | done | cancelled | error
+    scenarioKeys: jsonb("scenario_keys").$type<string[]>().notNull().default([]),
+    // Con qué se probó: modo de envío, umbrales, modelos y fecha del catálogo. Sin esto no se puede reproducir.
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull().default({}),
+    summary: jsonb("summary").$type<Record<string, unknown>>().notNull().default({}),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index("lab_runs_org_created_idx").on(t.organizationId, t.createdAt)],
+);
+
+export const labTurns = pgTable(
+  "lab_turns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => labRuns.id, { onDelete: "cascade" }),
+    scenarioKey: text("scenario_key").notNull(),
+    idx: integer("idx").notNull(),
+    clientText: text("client_text").notNull(),
+    disposition: text("disposition"),
+    route: text("route"),
+    intent: text("intent"),
+    source: text("source"),
+    replyText: text("reply_text"),
+    shownPropertyIds: jsonb("shown_property_ids").$type<string[]>().notNull().default([]),
+    violations: jsonb("violations").$type<unknown[]>().notNull().default([]),
+    // Lo que el agente habría hecho en producción y que en el Laboratorio NO se ejecutó.
+    simulatedActions: jsonb("simulated_actions").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("lab_turns_run_idx").on(t.runId, t.scenarioKey, t.idx)],
+);
+
+export const labFindings = pgTable(
+  "lab_findings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => labRuns.id, { onDelete: "cascade" }),
+    scenarioKey: text("scenario_key").notNull(),
+    turnIdx: integer("turn_idx"),
+    severity: text("severity").notNull(), // critico | alto | medio | info
+    rule: text("rule").notNull(),
+    evidence: text("evidence").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("lab_findings_run_idx").on(t.runId)],
+);
+
+
+// ─── Calendario interno + Google Calendar personal (OPE-005 fases 4-6) ──────
+// Ninguna cifra es un default comercial: la inmobiliaria define duración, traslados, anticipación y horizonte.
+// Mientras `enabled` sea false (o falte una cifra) el agente no ofrece horarios.
+
+export const calendarSettings = pgTable("calendar_settings", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  // Quién crea las reservas nuevas de esta inmobiliaria: un solo gestor a la vez (calcom | internal).
+  provider: text("provider").notNull().default("calcom"),
+  durationMin: integer("duration_min"),
+  bufferMin: integer("buffer_min"),
+  minNoticeMin: integer("min_notice_min"),
+  horizonDays: integer("horizon_days"),
+  timeZone: text("time_zone").notNull().default("America/Argentina/Buenos_Aires"),
+  // Sube con cada cambio de reglas: las ofertas emitidas con otra versión no se pueden reservar.
+  rulesVersion: integer("rules_version").notNull().default(1),
+  ...timestamps,
+});
+
+export const availabilityRules = pgTable(
+  "availability_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull(), // asesor (auth.users, sin FK)
+    weekday: integer("weekday").notNull(), // 0 = domingo
+    startMin: integer("start_min").notNull(),
+    endMin: integer("end_min").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    index("availability_rules_org_user_idx").on(t.organizationId, t.userId),
+    check("availability_rules_range", sql`${t.weekday} between 0 and 6 and ${t.startMin} >= 0 and ${t.endMin} <= 1440 and ${t.endMin} > ${t.startMin}`),
+  ],
+);
+
+// Excepciones: vacaciones, feriados, pausas. user_id null = toda la inmobiliaria.
+export const availabilityBlocks = pgTable(
+  "availability_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id"),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    reason: text("reason"),
+    ...timestamps,
+  },
+  (t) => [index("availability_blocks_org_idx").on(t.organizationId, t.startsAt), check("availability_blocks_range", sql`${t.endsAt} > ${t.startsAt}`)],
+);
+
+// Horarios ofrecidos a una conversación. El agente solo puede reservar una oferta vigente.
+export const bookingOffers = pgTable(
+  "booking_offers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "cascade" }),
+    advisorUserId: uuid("advisor_user_id").notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    rulesVersion: integer("rules_version").notNull(),
+    status: text("status").notNull().default("open"), // open | used | expired
+    ...timestamps,
+  },
+  (t) => [index("booking_offers_org_status_idx").on(t.organizationId, t.status, t.expiresAt)],
+);
+
+// Conexión PERSONAL a Google Calendar. La puede crear solo el propio usuario, con su sesión.
+export const calendarConnections = pgTable(
+  "calendar_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull(),
+    googleEmail: text("google_email"),
+    // Cifrado AES-256-GCM (INTEGRATIONS_ENCRYPTION_KEY). Nunca se loguea ni se devuelve al navegador.
+    refreshTokenEnc: text("refresh_token_enc").notNull(),
+    scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+    status: text("status").notNull().default("active"), // active | reauth_required | revoked
+    // Calendario secundario donde GHL publica las visitas.
+    destinationCalendarId: text("destination_calendar_id"),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("calendar_connections_org_user_key").on(t.organizationId, t.userId)],
+);
+
+// Qué calendarios de la persona bloquean disponibilidad. Solo se consultan intervalos ocupados (freebusy).
+export const calendarSelections = pgTable(
+  "calendar_selections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => calendarConnections.id, { onDelete: "cascade" }),
+    calendarId: text("calendar_id").notNull(),
+    summary: text("summary"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("calendar_selections_conn_cal_key").on(t.connectionId, t.calendarId)],
+);
+
+// Vínculo visita <-> evento de Google. El estado de sincronización es otro eje distinto del de la visita.
+export const calendarEventLinks = pgTable(
+  "calendar_event_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    visitId: uuid("visit_id")
+      .notNull()
+      .references(() => visits.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => calendarConnections.id, { onDelete: "cascade" }),
+    googleCalendarId: text("google_calendar_id").notNull(),
+    googleEventId: text("google_event_id"),
+    etag: text("etag"),
+    syncStatus: text("sync_status").notNull().default("pendiente"), // pendiente | sincronizada | error | divergente | cancelada
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("calendar_event_links_visit_key").on(t.visitId)],
+);
+
+// Outbox durable: lo que hay que hacer en Google, con reintento y clave de idempotencia.
+export const calendarSyncJobs = pgTable(
+  "calendar_sync_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => calendarConnections.id, { onDelete: "cascade" }),
+    visitId: uuid("visit_id").references(() => visits.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // upsert | delete | reconcile
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").notNull().default("pending"), // pending | running | done | error
+    attempts: integer("attempts").notNull().default(0),
+    runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("calendar_sync_jobs_key").on(t.idempotencyKey), index("calendar_sync_jobs_due_idx").on(t.status, t.runAfter)],
+);
+
+// Canales de notificación de Google (push). Caducan y hay que renovarlos.
+export const calendarWatchChannels = pgTable(
+  "calendar_watch_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    connectionId: uuid("connection_id")
+      .notNull()
+      .references(() => calendarConnections.id, { onDelete: "cascade" }),
+    calendarId: text("calendar_id").notNull(),
+    channelId: text("channel_id").notNull(),
+    resourceId: text("resource_id"),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("calendar_watch_channels_channel_key").on(t.channelId)],
+);
+
+// Estado del OAuth de Calendar: atado a usuario y organización, de un solo uso y con vencimiento.
+export const calendarOauthStates = pgTable("calendar_oauth_states", {
+  stateHash: text("state_hash").primaryKey(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull(),
+  codeVerifierEnc: text("code_verifier_enc").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

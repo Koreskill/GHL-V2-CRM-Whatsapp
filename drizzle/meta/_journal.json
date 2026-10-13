@@ -127,6 +127,41 @@
       "when": 1790950962333,
       "tag": "0017_novedades_y_puntaje",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791582365912,
+      "tag": "0018_accesos_y_cuentas",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791646541632,
+      "tag": "0019_invitaciones_y_estados",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791646733414,
+      "tag": "0020_revision_de_borradores",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791646811370,
+      "tag": "0021_laboratorio",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791647085203,
+      "tag": "0022_agenda_interna_y_google",
+      "breakpoints": true
     }
   ]
 }

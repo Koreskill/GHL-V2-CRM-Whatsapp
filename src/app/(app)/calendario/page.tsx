@@ -30,7 +30,15 @@ export default async function CalendarioPage({ searchParams }: PageProps<"/calen
   if (source.kind === "none" && visits.length === 0) {
     return (
       <>
-        <PageHeader title="Calendario" subtitle="Agenda de visitas de tu inmobiliaria" />
+        <PageHeader
+          title="Calendario"
+          subtitle="Agenda de visitas de tu inmobiliaria"
+          actions={
+            <Link href="/calendario/disponibilidad" className="text-[13px] font-medium text-primary underline">
+              Disponibilidad y Google Calendar
+            </Link>
+          }
+        />
         <Card>
           <EmptyState
             icon={CalendarDays}

@@ -10,6 +10,7 @@ import {
   Home,
   CalendarDays,
   FileText,
+  FlaskConical,
   GitBranch,
   LayoutGrid,
   LogOut,
@@ -124,6 +125,12 @@ export function Sidebar({
       </nav>
 
       <div className="mt-4 flex flex-col gap-3 border-t border-white/5 pt-4">
+        {user.role === "admin" && (
+          <NavLink
+            item={{ href: "/laboratorio", label: "Laboratorio", icon: FlaskConical }}
+            active={isActive("/laboratorio")}
+          />
+        )}
         {user.role === "admin" && (
           <NavLink
             item={{ href: "/configuracion", label: "Configuración", icon: Settings }}

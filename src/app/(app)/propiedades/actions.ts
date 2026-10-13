@@ -179,3 +179,10 @@ export async function syncOwnProperties() {
   if (!result.ok) fail("/propiedades", result.error ?? "La sincronización falló");
   redirect(`/propiedades?sync=${result.upserted}`);
 }
+
+/** Revisar la hoja sin importar nada: qué columnas se entienden y qué falta. */
+export async function analyzeOwnSheet() {
+  const { orgId } = await authorizeAction();
+  const { analyzeOrgSheet } = await import("@/lib/sheets/analyze-run");
+  return analyzeOrgSheet(orgId);
+}

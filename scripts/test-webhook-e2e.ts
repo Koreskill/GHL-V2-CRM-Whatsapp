@@ -151,7 +151,7 @@ async function main() {
     await db.update(conversations).set({ aiEnabled: true }).where(eq(conversations.id, conv.id));
 
     // ---- deliverMessage: Zernio rechaza la cuenta falsa -> fila persistida como failed ----
-    const failed = await deliverMessage(conv.id, { text: "Prueba e2e", source: "human" });
+    const failed = await deliverMessage(conv.id, { text: "Prueba e2e", source: "human", organizationId: ORG });
     assert.equal(failed.ok, false);
     assert.equal(!failed.ok && failed.code, "send_failed", "un envío rechazado no se pierde en silencio");
     const [failedRow] = await db.select().from(messages).where(eq(messages.id, (!failed.ok && failed.message?.id) || ""));
@@ -161,7 +161,7 @@ async function main() {
 
     // ---- Ventana cerrada: WhatsApp fuera de 24 h no deja enviar texto ----
     await db.update(conversations).set({ lastInboundAt: new Date(Date.now() - 25 * 3_600_000) }).where(eq(conversations.id, conv.id));
-    const closed = await deliverMessage(conv.id, { text: "no debería salir", source: "human" });
+    const closed = await deliverMessage(conv.id, { text: "no debería salir", source: "human", organizationId: ORG });
     assert.equal(!closed.ok && closed.code, "window_closed");
     assert.equal((await getConversation(conv.id, ORG))?.window.state, "template_only");
     assert.equal((await db.select().from(messages).where(eq(messages.conversationId, conv.id))).length, 2, "la ventana cerrada no inserta nada");

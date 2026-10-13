@@ -1,7 +1,7 @@
-import { sql } from "drizzle-orm";
-import type { Db } from "@/db";
+import { and, eq, sql } from "drizzle-orm";
+import type { DbExecutor as Db } from "@/db";
 import { channelAccounts, type Channel } from "@/db/schema";
-import { DEFAULT_ORG_ID } from "@/lib/tenancy";
+import { reportIncident, resolveIncidents } from "@/lib/incidents/report";
 import { zernioRequest, type Result } from "./client";
 import type { ConnectPlatform, ConnectUrlResponse, ListAccountsResponse, ZernioAccount } from "./types";
 
@@ -38,39 +38,66 @@ export function getConnectUrl(platform: ConnectPlatform, redirectUrl: string, op
   });
 }
 
-// Refleja en channel_accounts las cuentas de WhatsApp/Instagram/Facebook conectadas en Zernio.
-export async function syncChannelAccounts(db: Db): Promise<Result<{ synced: number }>> {
+export type AccountSnapshot = {
+  externalId: string;
+  channel: Channel;
+  name: string | null;
+  handle: string | null;
+  status: "connected" | "disconnected";
+  metadata?: Record<string, unknown>;
+};
+
+// Actualiza una cuenta que YA pertenece a una inmobiliaria. Una cuenta desconocida NO se inserta:
+// ni el webhook ni el listado de Zernio dicen a qué inmobiliaria corresponde, y asumir una (antes
+// DEFAULT_ORG_ID) dejaba la bandeja de un cliente en manos de otro. Queda un incidente de agencia
+// "cuenta sin asignar" para que la agencia la asigne. Devuelve si la cuenta tenía dueño.
+export async function applyAccountSnapshot(db: Db, a: AccountSnapshot): Promise<{ assigned: boolean }> {
+  const updated = await db
+    .update(channelAccounts)
+    .set({
+      status: a.status,
+      ...(a.name ? { name: a.name } : {}),
+      ...(a.handle ? { handle: a.handle } : {}),
+      metadata: sql`${channelAccounts.metadata} || ${JSON.stringify(a.metadata ?? {})}::jsonb`,
+      updatedAt: sql`now()`,
+    })
+    .where(and(eq(channelAccounts.provider, "zernio"), eq(channelAccounts.externalId, a.externalId)))
+    .returning({ id: channelAccounts.id });
+  if (updated.length > 0) {
+    await resolveIncidents(null, "mensajeria", `cuenta-sin-asignar:${a.externalId}`);
+    return { assigned: true };
+  }
+
+  await reportIncident({
+    organizationId: null,
+    module: "mensajeria",
+    severity: "advertencia",
+    message: `Cuenta de ${a.channel} sin asignar${a.handle ? ` (@${a.handle})` : ""}: asignala a una inmobiliaria para que entren sus mensajes.`,
+    key: `cuenta-sin-asignar:${a.externalId}`,
+    context: { externalId: a.externalId, channel: a.channel, name: a.name, handle: a.handle },
+  });
+  return { assigned: false };
+}
+
+// Refleja en channel_accounts el estado de las cuentas de WhatsApp/Instagram/Facebook en Zernio.
+// Solo toca las que ya tienen inmobiliaria; las demás quedan como incidente de agencia.
+export async function syncChannelAccounts(db: Db): Promise<Result<{ synced: number; unassigned: number }>> {
   const res = await listAccounts();
   if (!res.success) return res;
 
-  const rows = res.data
-    .filter((a) => isCrmChannel(a.platform))
-    .map((a) => ({
-      // Sync refleja el workspace de Zernio; sin contexto de tenant cae en la org por defecto (puente).
-      organizationId: DEFAULT_ORG_ID,
-      provider: "zernio" as const,
-      channel: a.platform as Channel,
+  let synced = 0;
+  let unassigned = 0;
+  for (const a of res.data.filter((x) => isCrmChannel(x.platform))) {
+    const out = await applyAccountSnapshot(db, {
       externalId: a._id,
+      channel: a.platform as Channel,
       name: a.displayName ?? a.username ?? null,
       handle: a.username ?? null,
       status: a.isActive ? "connected" : "disconnected",
       metadata: { profilePicture: a.profilePicture ?? null },
-    }));
-
-  if (rows.length > 0) {
-    await db
-      .insert(channelAccounts)
-      .values(rows)
-      .onConflictDoUpdate({
-        target: [channelAccounts.organizationId, channelAccounts.externalId],
-        set: {
-          name: sql`excluded.name`,
-          handle: sql`excluded.handle`,
-          status: sql`excluded.status`,
-          metadata: sql`excluded.metadata`,
-          updatedAt: sql`now()`,
-        },
-      });
+    });
+    if (out.assigned) synced++;
+    else unassigned++;
   }
-  return { success: true, data: { synced: rows.length } };
+  return { success: true, data: { synced, unassigned } };
 }

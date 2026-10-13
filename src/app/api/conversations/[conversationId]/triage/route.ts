@@ -15,6 +15,6 @@ export async function POST(req: Request, { params }: RouteContext<"/api/conversa
   if (body?.action !== "descartar") return jsonError(400, "Acción no soportada");
 
   // El triaje queda como descartado, con su clasificación intacta: sirve para recalibrar después.
-  await resolveTriage(body.triageId, auth.session.organizationId);
+  await resolveTriage(body.triageId, auth.session.organizationId, auth.session.user.id);
   return Response.json({ ok: true });
 }

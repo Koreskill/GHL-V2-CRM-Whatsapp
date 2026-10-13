@@ -5,7 +5,8 @@ import { requireOrgId } from "@/lib/auth";
 import { formatListDate } from "@/lib/format";
 import { countCatalog, getSyncConfig, listCatalog, listZones, type PropertyFilters } from "@/lib/properties/catalog";
 import { cn } from "@/lib/utils";
-import { syncOwnProperties } from "./actions";
+import { SheetCheck, SheetRequirements } from "@/components/properties/sheet-help";
+import { analyzeOwnSheet, syncOwnProperties } from "./actions";
 
 export const metadata = { title: "Propiedades · Setter CRM" };
 
@@ -145,6 +146,8 @@ export default async function PropiedadesPage({ searchParams }: PageProps<"/prop
             )}
           </p>
         </div>
+        {sync && <SheetCheck action={analyzeOwnSheet} />}
+        <SheetRequirements />
       </Card>
 
       <div className="mb-5 flex flex-col gap-3">
