@@ -114,15 +114,46 @@ export async function countPendingTriage(orgId: string) {
  * Marca un triaje como atendido: la persona ya lo resolvió (mandó el borrador, escribió otra
  * cosa o lo descartó). No se borra: el registro de la clasificación queda.
  */
-export async function resolveTriage(id: string, orgId: string, sentMessageId?: string) {
+export async function resolveTriage(id: string, orgId: string, userId: string, sentMessageId?: string) {
   await getDb()
     .update(messageTriage)
     .set({
       status: sentMessageId ? "enviado" : "descartado",
+      decision: sentMessageId ? "send" : "ignore",
+      reviewAction: sentMessageId ? "aprobado" : "rechazado",
+      reviewedBy: userId,
+      reviewedAt: sql`now()`,
       sentMessageId: sentMessageId ?? null,
       updatedAt: sql`now()`,
     })
-    .where(and(eq(messageTriage.id, id), eq(messageTriage.organizationId, orgId)));
+    .where(and(eq(messageTriage.id, id), eq(messageTriage.organizationId, orgId), eq(messageTriage.status, "borrador")));
+}
+
+/**
+ * Una persona mandó un mensaje en una conversación con un borrador pendiente: queda registrado quién lo
+ * aprobó y si lo editó. Una edición NO se convierte en ejemplo correcto de entrenamiento: solo se anota.
+ */
+export async function recordDraftReview(input: { conversationId: string; orgId: string; userId: string; sentText: string; sentMessageId: string }) {
+  const [draft] = await getDb()
+    .select({ id: messageTriage.id, draftText: messageTriage.draftText })
+    .from(messageTriage)
+    .where(and(eq(messageTriage.conversationId, input.conversationId), eq(messageTriage.organizationId, input.orgId), eq(messageTriage.status, "borrador")))
+    .orderBy(desc(messageTriage.createdAt))
+    .limit(1);
+  if (!draft) return;
+  const same = (draft.draftText ?? "").trim() === input.sentText.trim();
+  await getDb()
+    .update(messageTriage)
+    .set({
+      status: "enviado",
+      decision: "send",
+      reviewAction: same ? "aprobado" : "editado",
+      reviewedBy: input.userId,
+      reviewedAt: sql`now()`,
+      sentMessageId: input.sentMessageId,
+      updatedAt: sql`now()`,
+    })
+    .where(eq(messageTriage.id, draft.id));
 }
 
 /** Métricas del triaje para Reportes y para la vista de agencia. */

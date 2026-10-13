@@ -1,5 +1,6 @@
 import { type EmailOtpType } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
+import { safeNext } from "@/lib/safe-redirect";
 import { requestOrigin } from "@/lib/request-origin";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
@@ -11,8 +12,8 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const tokenHash = searchParams.get("token_hash");
   const type = searchParams.get("type") as EmailOtpType | null;
-  const nextParam = searchParams.get("next") ?? "/";
-  const next = nextParam.startsWith("/") && !nextParam.startsWith("//") ? nextParam : "/";
+  // Recuperación cae en /recuperar/nueva (que safeNext no bloquea); el resto, ruta interna validada.
+  const next = safeNext(searchParams.get("next"));
   const origin = requestOrigin(request);
 
   if (!tokenHash || !type || !TYPES.includes(type)) {

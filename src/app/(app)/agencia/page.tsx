@@ -44,12 +44,17 @@ export default async function AgenciaPage() {
         title="Agencia"
         subtitle="Cómo viene cada cliente: conversaciones, respuestas del agente y uso de IA"
         actions={
-          <Link href="/agencia/nuevo">
-            <Button>
-              <Plus className="size-4" strokeWidth={2} />
-              Nuevo cliente
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/agencia/accesos">
+              <Button variant="secondary">Accesos</Button>
+            </Link>
+            <Link href="/agencia/nuevo">
+              <Button>
+                <Plus className="size-4" strokeWidth={2} />
+                Nuevo cliente
+              </Button>
+            </Link>
+          </div>
         }
       />
 

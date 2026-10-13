@@ -1,3 +1,4 @@
+import { getCalendarSettings, internalActive } from "./book";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { contacts, visitBookings, visitEvents, visits } from "@/db/schema";
@@ -28,6 +29,9 @@ async function record(orgId: string, visitId: string, patch: Partial<typeof visi
 
 export async function syncVisit(orgId: string, visitId: string): Promise<SyncOutcome> {
   try {
+    // Un solo gestor crea reservas nuevas: si la inmobiliaria ya migró al calendario interno, Cal.com no crea
+    // ni reprograma nada (evita eventos duplicados). Lo ya reservado en Cal.com sigue conciliándose por webhook.
+    if (internalActive(await getCalendarSettings(orgId))) return { ok: true, status: "omitida" };
     const integration = await getIntegration(orgId);
     // Sin integración no hay nada que sincronizar: la visita sigue siendo solo local.
     if (!integration || integration.status === "desconectada") return { ok: true, status: "omitida" };

@@ -7,6 +7,8 @@ import { getDb } from "@/db";
 import { deals, visitEvents, visits } from "@/db/schema";
 import { isUuid } from "@/lib/api";
 import { authorizeAction } from "@/lib/deals/guard";
+import { applyManualSchedule, getCalendarSettings, internalActive } from "@/lib/calendar/book";
+import { enqueueVisitSync } from "@/lib/calendar/google/outbox";
 import { syncVisit } from "@/lib/calendar/sync";
 import { wallTimeToDate } from "@/lib/tz";
 import { after } from "next/server";
@@ -61,7 +63,10 @@ export async function requestVisit(formData: FormData) {
     .where(and(eq(deals.id, dealId), eq(deals.organizationId, orgId)));
   if (!deal) fail(back, "La oportunidad no existe.");
 
-  const scheduledAt = parseWhen(text(formData, "scheduledAt", 40));
+  const internal = internalActive(await getCalendarSettings(orgId));
+  // Con el calendario interno activo, agendar pasa SIEMPRE por scheduleVisit (valida que el asesor no tenga choque).
+  const requestedAt = parseWhen(text(formData, "scheduledAt", 40));
+  const scheduledAt = internal ? null : requestedAt;
   const assignedRaw = text(formData, "assignedUserId", 64);
 
   const [created] = await getDb()
@@ -90,6 +95,13 @@ export async function requestVisit(formData: FormData) {
       await syncVisit(orgId, created.id);
     });
   }
+  if (internal && requestedAt && isUuid(assignedRaw)) {
+    const res = await applyManualSchedule({ orgId, visitId: created.id, startsAt: requestedAt, actorUserId: session.user.id });
+    if (!res.ok) {
+      revalidatePath("/visitas");
+      fail(back, res.reason === "ocupado" ? "La visita quedó solicitada: el asesor ya tiene otra en ese horario." : "La visita quedó solicitada, sin fecha.");
+    }
+  }
 
   revalidatePath("/visitas");
   revalidatePath(`/pipeline/${dealId}`);
@@ -113,6 +125,27 @@ export async function scheduleVisit(formData: FormData) {
     .from(visits)
     .where(and(eq(visits.id, visitId), eq(visits.organizationId, orgId)));
   if (!current) redirect("/visitas");
+
+  // Calendario interno activo: el choque de horarios lo decide Postgres (restricción de exclusión) y la
+  // proyección a Google va por el outbox, no por Cal.com.
+  if (internalActive(await getCalendarSettings(orgId))) {
+    const res = await applyManualSchedule({ orgId, visitId, startsAt: scheduledAt, actorUserId: session.user.id });
+    if (!res.ok) {
+      fail(
+        back,
+        res.reason === "ocupado"
+          ? "El asesor ya tiene una visita en ese horario."
+          : res.reason === "sin_asesor"
+            ? "Asigna un asesor a la visita antes de agendarla."
+            : res.reason === "visita_cerrada"
+              ? "La visita ya está cerrada o cancelada: no se puede reagendar."
+              : "El calendario interno no está configurado.",
+      );
+    }
+    revalidatePath("/visitas");
+    revalidatePath(`/pipeline/${current.dealId}`);
+    redirect(back);
+  }
 
   await db
     .update(visits)
@@ -204,9 +237,14 @@ export async function cancelVisit(formData: FormData) {
     from: current.status,
     to: reason,
   });
-  after(async () => {
-    await syncVisit(orgId, visitId);
-  });
+  if (internalActive(await getCalendarSettings(orgId))) {
+    // Se retira el evento de Google por el outbox; la visita ya quedó cancelada en la base.
+    await enqueueVisitSync(db, { organizationId: orgId, visitId, kind: "delete" }).catch(() => {});
+  } else {
+    after(async () => {
+      await syncVisit(orgId, visitId);
+    });
+  }
 
   revalidatePath("/visitas");
   revalidatePath(`/pipeline/${current.dealId}`);

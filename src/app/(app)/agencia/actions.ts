@@ -2,8 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createOrganization, slugTaken, writeAudit } from "@/lib/agency/queries";
-import { createClientUser, deleteClientUser, setUserPassword } from "@/lib/agency/users";
+import { approveAccessRequest, assignAccount, listUnassignedAccounts, rejectAccessRequest } from "@/lib/agency/access";
+import { createOrganization, listOrganizations, slugTaken, writeAudit } from "@/lib/agency/queries";
+import { createInvitation, revokeInvitation } from "@/lib/agency/invitations";
+import { createClientUser, reactivateMember, revokeMember, setUserPassword, suspendMember } from "@/lib/agency/users";
+import { trustedOriginFromHeaders } from "@/lib/request-origin";
+import { headers } from "next/headers";
 import { toSlug } from "@/lib/agency/slug";
 import { writeActingOrgCookie } from "@/lib/agency/context";
 import { requireAgencyAdmin } from "@/lib/auth";
@@ -127,6 +131,7 @@ export async function resetClientPassword(formData: FormData) {
   redirect(`${back}?usuario=clave`);
 }
 
+// Baja de la inmobiliaria: saca el acceso y conserva la identidad y el historial.
 export async function removeClientUser(formData: FormData) {
   const session = await requireAgencyAdmin();
   if (!session) redirect("/");
@@ -134,20 +139,63 @@ export async function removeClientUser(formData: FormData) {
   const userId = field(formData, "userId");
   if (!isUuid(orgId) || !isUuid(userId)) redirect("/agencia");
   const back = `/agencia/${orgId}`;
-  // Nadie se borra a sí mismo: dejaría la agencia sin dueño.
-  if (userId === session.user.id) fail(back, "No puedes eliminar tu propio usuario.");
+  // Nadie se da de baja a sí mismo: dejaría la agencia sin dueño.
+  if (userId === session.user.id) fail(back, "No puedes darte de baja a ti mismo.");
 
-  const result = await deleteClientUser(userId);
+  const result = await revokeMember(orgId, userId);
   if (result.error) fail(back, result.error);
 
-  await writeAudit({
-    actorUserId: session.user.id,
-    actingAsOrganizationId: orgId,
-    action: "user_deleted",
-    target: `user:${userId}`,
-  });
+  await writeAudit({ actorUserId: session.user.id, actingAsOrganizationId: orgId, action: "member_revoked", target: `user:${userId}` });
   revalidatePath(back);
   redirect(`${back}?usuario=eliminado`);
+}
+
+export async function setMemberSuspendedAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  const userId = field(formData, "userId");
+  const suspend = field(formData, "suspend") === "1";
+  if (!isUuid(orgId) || !isUuid(userId)) redirect("/agencia");
+  const back = `/agencia/${orgId}`;
+  if (userId === session.user.id) fail(back, "No puedes suspenderte a ti mismo.");
+
+  const result = suspend ? await suspendMember(orgId, userId) : await reactivateMember(orgId, userId);
+  if (result.error) fail(back, result.error);
+  await writeAudit({ actorUserId: session.user.id, actingAsOrganizationId: orgId, action: suspend ? "member_suspended" : "member_reactivated", target: `user:${userId}` });
+  revalidatePath(back);
+  redirect(`${back}?usuario=${suspend ? "suspendido" : "reactivado"}`);
+}
+
+// Invitación: devuelve el enlace UNA vez (el token no se puede recuperar después: solo queda su hash).
+export type InviteState = { link?: string; error?: string };
+export async function inviteUserAction(_prev: InviteState, formData: FormData): Promise<InviteState> {
+  const session = await requireAgencyAdmin();
+  if (!session) return { error: "Sin permiso." };
+  const orgId = field(formData, "organizationId");
+  const email = field(formData, "email").toLowerCase();
+  const role = field(formData, "role") === "admin" ? "admin" : "agent";
+  if (!isUuid(orgId)) return { error: "Elige una inmobiliaria." };
+  if (!EMAIL_RE.test(email)) return { error: "El email no es válido." };
+  if (!(await listOrganizations()).some((o) => o.id === orgId)) return { error: "La inmobiliaria no existe." };
+
+  const origin = trustedOriginFromHeaders(await headers());
+  if (!origin) return { error: "No se pudo determinar el dominio. Define ALLOWED_HOSTS." };
+  const { token } = await createInvitation({ organizationId: orgId, email, role, invitedBy: session.user.id });
+  await writeAudit({ actorUserId: session.user.id, actingAsOrganizationId: orgId, action: "invitation_created", target: `email:${email}`, metadata: { role } });
+  revalidatePath("/agencia/accesos");
+  return { link: `${origin}/invitacion/${token}` };
+}
+
+export async function revokeInvitationAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const id = field(formData, "invitationId");
+  if (!isUuid(id)) redirect("/agencia/accesos");
+  await revokeInvitation(id);
+  await writeAudit({ actorUserId: session.user.id, action: "invitation_revoked", target: `invitation:${id}` });
+  revalidatePath("/agencia/accesos");
+  redirect("/agencia/accesos?ok=invitacion_revocada");
 }
 
 // ─── Cambio de contexto: entrar al espacio de un cliente ────────────────────
@@ -296,4 +344,75 @@ export async function retryIncident(formData: FormData) {
   });
   revalidatePath("/agencia/errores");
   redirect("/agencia/errores");
+}
+
+// Revisar la hoja de un cliente SIN importar: qué columnas se entienden y qué falta.
+export async function analyzeClientSheet(_prev: unknown, formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) return { ok: false as const, error: "Cliente inválido." };
+  const { analyzeOrgSheet } = await import("@/lib/sheets/analyze-run");
+  return analyzeOrgSheet(orgId);
+}
+
+// ─── Accesos y cuentas sin asignar ──────────────────────────────────────────
+
+// Aprobar una solicitud de Google: la agencia elige inmobiliaria y rol. Queda auditado.
+export async function approveAccessAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  if (!hasAdminKey()) fail("/agencia/accesos", "Falta SUPABASE_SECRET_KEY en el servidor.");
+  const requestId = field(formData, "requestId");
+  const organizationId = field(formData, "organizationId");
+  const role = field(formData, "role") === "admin" ? "admin" : "agent";
+  if (!isUuid(requestId) || !isUuid(organizationId)) fail("/agencia/accesos", "Datos inválidos.");
+  if (!(await listOrganizations()).some((o) => o.id === organizationId)) fail("/agencia/accesos", "La inmobiliaria no existe.");
+
+  const res = await approveAccessRequest({ requestId, organizationId, role, actorUserId: session.user.id });
+  if (res.error) fail("/agencia/accesos", res.error);
+  await writeAudit({
+    actorUserId: session.user.id,
+    actingAsOrganizationId: organizationId,
+    action: "access_approved",
+    target: `access_request:${requestId}`,
+    metadata: { role },
+  });
+  revalidatePath("/agencia/accesos");
+  redirect("/agencia/accesos?ok=aprobado");
+}
+
+export async function rejectAccessAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const requestId = field(formData, "requestId");
+  if (!isUuid(requestId)) fail("/agencia/accesos", "Datos inválidos.");
+  await rejectAccessRequest(requestId, session.user.id);
+  await writeAudit({ actorUserId: session.user.id, action: "access_rejected", target: `access_request:${requestId}` });
+  revalidatePath("/agencia/accesos");
+  redirect("/agencia/accesos?ok=rechazado");
+}
+
+export async function assignAccountAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const externalId = field(formData, "externalId", 200);
+  const organizationId = field(formData, "organizationId");
+  if (!externalId || !isUuid(organizationId)) fail("/agencia/accesos", "Datos inválidos.");
+  if (!(await listOrganizations()).some((o) => o.id === organizationId)) fail("/agencia/accesos", "La inmobiliaria no existe.");
+  // Los datos de la cuenta salen del incidente registrado por el servidor, nunca del formulario.
+  const account = (await listUnassignedAccounts()).find((a) => a.externalId === externalId);
+  if (!account) fail("/agencia/accesos", "Esa cuenta ya no figura como pendiente.");
+
+  const res = await assignAccount(account, organizationId);
+  if (res.error) fail("/agencia/accesos", res.error);
+  await writeAudit({
+    actorUserId: session.user.id,
+    actingAsOrganizationId: organizationId,
+    action: "account_assigned",
+    target: `channel_account:${externalId}`,
+    metadata: { channel: account.channel },
+  });
+  revalidatePath("/agencia/accesos");
+  redirect("/agencia/accesos?ok=asignada");
 }

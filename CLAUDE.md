@@ -60,7 +60,7 @@ Romper cualquiera de estas no produce un error: produce mensajes que se pierden 
 - `deliverMessage` inserta una fila `pending`, usa su id como `Idempotency-Key`, y si el webhook `message.sent` ganó la carrera (violación de único) borra la pendiente y conserva la del webhook.
 - Agente: `triageIncomingMessage(conversationId, { triggerMessageId })` (ver Fase 12). Corta si hay un mensaje posterior al disparador, antes y después de llamar al modelo, así dos mensajes seguidos del cliente reciben una sola respuesta.
 - Contactos, Actividades y Reportes salen de `src/lib/crm/queries.ts` (datos reales, sin tablas nuevas). Calendario: reservas próximas vía API v2 de Cal.com (`CALCOM_API_KEY`, header `cal-api-version: 2024-08-13`) + página de agenda embebida desde `CALCOM_URL` (runtime, solo https). El agente recibe `CALCOM_URL` en su prompt para compartirlo cuando alguien quiere agendar.
-- Pruebas: `npm test` (firma, ventana, cascada) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
+- Pruebas: `npm test` (sin base: firma, ventana, cascada, agenda, redirects) y `npm run test:db` (con base, dentro de transacciones que se revierten; `test:all` corre las dos) y `npm run test:e2e` con `npm run dev` levantado (webhook, bandeja, agente, deliverMessage contra la base real; limpia sus datos).
 
 ## Pipeline de oportunidades (Fase 7)
 
@@ -300,6 +300,12 @@ Migraciones **0013 a 0016: hay que aplicarlas (rol dueño) ANTES de desplegar**.
 - Envío: header `Idempotency-Key` hace seguros los reintentos. Fuera de ventana en IG/FB: `messagingType: "MESSAGE_TAG"` + `messageTag: "HUMAN_AGENT"`. WhatsApp fuera de ventana: campo `template`.
 - Atribución de anuncios: `metadata.referral` en `message.received` (solo el primer mensaje tras el click) y `metadata` del listado REST (`ctwa_*`, `meta_ad_id`).
 
+## Entornos y pruebas contra base real (checkpoint 2026-10-13)
+
+- **`.env.local` apunta a la base de PRODUCCIÓN** (mismo proyecto Supabase). `npm test` es seguro (no toca la base); `npm run test:db`, `test:e2e` y `eval` SÍ se conectan: corren en transacciones que se revierten, pero **no correrlos contra producción**. Para eso hay que crear un proyecto/rama de Supabase de staging y apuntar `DATABASE_URL` ahí.
+- `getSession()` rechaza a quien tenga membresía no `active` (suspendido/dado de baja) aunque su JWT siga vigente. Aprobar un acceso o aceptar una invitación **no mueve** a una cuenta que ya pertenece a otra inmobiliaria (`activeOrganizationOf`).
+- `requestOrigin` respeta `ALLOWED_HOSTS` (callbacks OAuth y dirección de los push de Google). Pool de base: `DB_POOL_MAX` (10 por defecto). Laboratorio: `LAB_MAX_CONCURRENT_RUNS` (2 por defecto, global).
+
 ## Fases (no avanzar si la anterior no compila)
 
 Al terminar cada fase: `npm run typecheck`, `npm run lint` y `npm run build` limpios.
@@ -334,3 +340,31 @@ No rediseñar, no modernizar, no inventar pantallas que no estén definidas. Tok
 - **Empty states:** ícono chico en círculo pálido + título semibold + 1–3 líneas muted + mucho aire. Sin ilustraciones.
 - **Copy:** español, directo, operativo. Ej.: "Selecciona una conversación", "Sin deals en esta etapa".
 - **Pipeline:** Prospecto (gris-azul), Contactado (azul), Propuesta (púrpura), Negociación (naranja), Cerrado Ganado (verde).
+
+## Identidad con Google y cuentas sin asignar (OPE-005, fases 0-1)
+
+**Migración 0018 (`access_requests`): aplicarla con el rol dueño ANTES de desplegar.**
+
+- `safeNext` (`lib/safe-redirect.ts`) es la ÚNICA validación del `next` de login, OTP y callback. No volver a escribir una a mano.
+- "Continuar con Google" pide solo `openid email profile`. Calendar se autoriza aparte (fase 5). `/auth/callback` canjea el código (PKCE); con `crm_role` + `organization_id` en `app_metadata` entra, si no queda una fila en `access_requests` y va a `/acceso-pendiente`. El rol/tenant nunca sale de `user_metadata`, URL ni formulario.
+- Requiere configurar Google en Supabase (Client ID/Secret), Site URL y Redirect URLs `https://<host>/auth/callback`.
+- Cuenta de mensajería desconocida (webhook `account.connected` o sync de Zernio): **ya no cae en `DEFAULT_ORG_ID`**. `applyAccountSnapshot` solo actualiza cuentas con dueño; las demás abren un incidente de agencia (`mensajeria`, "cuenta sin asignar"). `DEFAULT_ORG_ID` queda solo para scripts.
+
+### Auditoría OPE-005 (2026-10-10): ya corregido
+- **Recuperación de contraseña:** el enlace del correo usa `trustedOriginFromHeaders`. Con `ALLOWED_HOSTS` (opcional, lista separada por comas) un Host/X-Forwarded-Host falsificado no puede apuntar el correo a otro dominio. Recomendado definirla en producción.
+- **Baja confianza:** una ruta `aclaracion` o un texto armado por código (`source: "determinista"`, modelo caído o validador) ya NO se envían solos en modo `auto`: quedan como borrador (`run.ts`, `needsReview`). Derivaciones y acuses no cambian.
+- **Panel `/agencia/accesos`:** aprobar/rechazar solicitudes de Google (elige inmobiliaria y rol, escribe `app_metadata` y `organization_members`) y asignar cuentas de mensajería sin dueño. Todo en `audit_logs`.
+- `listUsersByOrg` parte de `organization_members` en vez de recorrer todos los usuarios de Auth.
+
+## OPE-005: invitaciones, revisión, Laboratorio y agenda interna (migraciones 0018-0022)
+
+**Aplicar 0018 a 0022 con el rol dueño ANTES de desplegar** (0022 crea la extensión `btree_gist`). Checklist de lo que falta hacer afuera del código: `docs/checklist-ope-005.md`.
+
+- **Invitaciones** (`lib/agency/invitations.ts`): el token viaja una sola vez en el enlace; en la base solo su hash sha256. Se canjea con `UPDATE ... WHERE status='pending'` (uso único), vence a los 7 días y solo lo acepta la cuenta cuyo email VERIFICADO coincide. No hay envío de correo todavía: la agencia copia el enlace.
+- **Estados de membresía** (`organization_members.status`): suspender = `ban_duration` en Auth + estado `suspended` (acceso cortado ya, historial intacto). Dar de baja limpia `app_metadata` pero NO borra la identidad. Nunca se suspende ni se da de baja al último administrador activo.
+- **Revisión de borradores:** `message_triage.decision` (send|draft|handoff|ignore) y `review_action/reviewed_by/reviewed_at`. Un mensaje nuevo del cliente deja obsoleto el borrador anterior del hilo. Cuando una persona manda un mensaje con un borrador pendiente (`/api/messages/send`) queda registrado si lo aprobó o lo editó. Una edición NO es un ejemplo de entrenamiento.
+- **`deliverMessage` exige `organizationId` en TODOS los llamadores** (también el agente y las campañas).
+- **Laboratorio** (`/laboratorio`, `lib/lab/`): corre `composeReply` real dentro de `runInSandbox` (`db/index.ts`): una transacción que SIEMPRE se revierte y que solo ve ese contexto asíncrono (AsyncLocalStorage). **No usar el truco de `globalThis.db = tx` de `scripts/eval-conversations.ts` dentro del servidor**: haría que un webhook real escribiera en una transacción descartada. Resultados en `lab_*` (conexión normal). Ninguna corrida envía mensajes ni crea contactos/oportunidades/visitas. Limitación: la transacción queda abierta mientras se esperan los modelos (un escenario, máx. 6 turnos) y el consumo de IA se revierte con ella.
+- **Agenda interna** (`lib/calendar/`): `availability.ts` son funciones puras (probadas). Sin `calendar_settings` completos y `enabled`, NO se ofrece ningún horario: la duración, traslado, anticipación y horizonte no tienen default. Un asesor no puede tener dos visitas agendadas que se pisen: lo garantiza una restricción de exclusión de Postgres (`visits_no_overlap_per_advisor`), no un índice por hora de inicio. `settings.provider` ('calcom' | 'internal') decide quién crea reservas nuevas; con 'internal', `syncVisit` (Cal.com) no hace nada.
+- **Google Calendar personal** (`lib/calendar/google/`): autorización DISTINTA del login (cliente OAuth propio: `GOOGLE_CALENDAR_CLIENT_ID/SECRET`), PKCE, `state` de un solo uso atado a usuario y organización, scopes mínimos (`calendarlist.readonly`, `events.freebusy`, `calendar.app.created`), refresh token cifrado con `INTEGRATIONS_ENCRYPTION_KEY`. Solo se leen intervalos ocupados. Si Google está conectado y no se puede leer, **no se ofrece el horario** (no se asume libre). El evento se publica en un calendario secundario por un outbox con lease y reintento (`/api/cron/calendar-google`, cada 5 min); un error remoto queda visible en `calendar_event_links.sync_status`. El modo agencia nunca usa ni gestiona credenciales personales.
+- `GET /api/health`: readiness (base + versión).

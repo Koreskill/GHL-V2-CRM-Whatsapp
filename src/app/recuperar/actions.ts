@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
-import { originFromHeaders } from "@/lib/request-origin";
+import { trustedOriginFromHeaders } from "@/lib/request-origin";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 const MAX_FIELD = 320;
@@ -19,7 +19,9 @@ export async function requestReset(formData: FormData) {
   const byEmail = rateLimit(`reset:email:${email}`, 3, 15 * 60_000);
   if (!byIp.ok || !byEmail.ok) redirect("/recuperar?error=limite");
 
-  const origin = originFromHeaders(h);
+  const origin = trustedOriginFromHeaders(h);
+  // Sin un host confiable no se manda un enlace que pueda apuntar a otro dominio. Misma respuesta al usuario.
+  if (!origin) redirect("/recuperar?enviado=1");
   const supabase = await createSupabaseServer();
   // El link del correo vuelve a /auth/confirm, que canjea el token y deja la sesión de recuperación.
   await supabase.auth.resetPasswordForEmail(email, {

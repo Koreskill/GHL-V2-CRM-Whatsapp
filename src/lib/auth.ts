@@ -33,6 +33,8 @@ export const getSession = cache(async (): Promise<Session | null> => {
   const role = roleOf(user);
   const homeOrganizationId = orgOf(user);
   if (!user?.email || !role || !homeOrganizationId) return null;
+  // Defensa en profundidad: suspendido o dado de baja en ESTA inmobiliaria no entra aunque su JWT siga vigente.
+  if (await membershipBlocked(user.id, homeOrganizationId)) return null;
 
   const agencyAdmin = isAgencyAdmin(user);
   let organizationId = homeOrganizationId;
@@ -58,6 +60,25 @@ export const getSession = cache(async (): Promise<Session | null> => {
     isAgencyAdmin: agencyAdmin,
   };
 });
+
+// Sin fila de membresía (cuentas anteriores a la tabla espejo) se deja pasar: el rol de Auth sigue mandando.
+// Con fila, solo `active` entra. Si la base no contesta, se niega: es más seguro que abrir la puerta.
+async function membershipBlocked(userId: string, orgId: string): Promise<boolean> {
+  try {
+    const [{ getDb }, { organizationMembers }, { and, eq }] = await Promise.all([
+      import("@/db"),
+      import("@/db/schema"),
+      import("drizzle-orm"),
+    ]);
+    const [row] = await getDb()
+      .select({ status: organizationMembers.status })
+      .from(organizationMembers)
+      .where(and(eq(organizationMembers.userId, userId), eq(organizationMembers.organizationId, orgId)));
+    return Boolean(row && row.status !== "active");
+  } catch {
+    return true;
+  }
+}
 
 // Import perezoso: auth.ts lo carga el proxy, que corre en el runtime de edge y no debería
 // arrastrar el cliente de Postgres salvo que de verdad haga falta resolver un cambio de contexto.

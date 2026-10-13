@@ -7,7 +7,7 @@ import { supabaseCookieOptions, supabaseEnv } from "@/lib/supabase/env";
 // Rutas que no exigen sesión: el login, la recuperación de contraseña (el enlace del correo llega
 // sin sesión), lo que llama Zernio (firmado con HMAC) y los barridos (CRON_SECRET).
 // /recuperar/nueva sí necesita la sesión que abre el enlace, y la valida la propia página.
-const PUBLIC_PREFIXES = ["/login", "/recuperar", "/auth/confirm", "/api/webhooks/", "/webhooks/", "/api/cron/", "/p/"];
+const PUBLIC_PREFIXES = ["/login", "/recuperar", "/auth/confirm", "/auth/callback", "/acceso-pendiente", "/invitacion/", "/api/webhooks/", "/webhooks/", "/api/cron/", "/api/health", "/p/"];
 const MACHINE_PREFIXES = ["/api/webhooks/", "/webhooks/", "/api/cron/"];
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -42,6 +42,8 @@ export async function proxy(request: NextRequest) {
     const origin = request.headers.get("origin");
     const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
     if (origin && host && originHost(origin) !== host) return json(403, "Origen no permitido");
+    // Sin Origin (algunos clientes lo omiten): el navegador igual declara si la petición vino de otro sitio.
+    if (!origin && request.headers.get("sec-fetch-site") === "cross-site") return json(403, "Origen no permitido");
   }
 
   if (isPublic(pathname)) return NextResponse.next();
@@ -66,6 +68,14 @@ export async function proxy(request: NextRequest) {
   if (data.user && roleOf(data.user)) return response;
 
   if (isApi) return json(data.user ? 403 : 401, data.user ? "Sin acceso" : "No autorizado");
+
+  // Identidad sin rol (típico: alta con Google sin invitación): espera de aprobación, no un login en bucle.
+  if (data.user) {
+    const wait = request.nextUrl.clone();
+    wait.pathname = "/acceso-pendiente";
+    wait.search = "";
+    return NextResponse.redirect(wait);
+  }
 
   const url = request.nextUrl.clone();
   url.pathname = "/login";

@@ -24,5 +24,5 @@ export async function POST() {
       }
     });
   }
-  return Response.json({ synced: res.data.synced, importing: pending.length });
+  return Response.json({ synced: res.data.synced, unassigned: res.data.unassigned, importing: pending.length });
 }

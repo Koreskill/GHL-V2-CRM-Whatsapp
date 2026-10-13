@@ -1,8 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { DbExecutor as Db } from "@/db";
 import { channelAccounts, conversations, messages, type Channel } from "@/db/schema";
-import { isCrmChannel } from "@/lib/zernio/accounts";
-import { DEFAULT_ORG_ID } from "@/lib/tenancy";
+import { applyAccountSnapshot, isCrmChannel } from "@/lib/zernio/accounts";
 import type {
   InboxWebhookAccount,
   InboxWebhookConversation,
@@ -203,23 +202,14 @@ async function ingestAccount(
   reason?: string,
 ): Promise<IngestResult> {
   if (!isCrmChannel(account.platform)) return { kind: "ignored", reason: `platform:${account.platform}` };
-  await db
-    .insert(channelAccounts)
-    .values({
-      // El webhook no dice a qué inmobiliaria pertenece la cuenta: cae en la org por defecto (puente).
-      organizationId: DEFAULT_ORG_ID,
-      provider: "zernio",
-      channel: account.platform,
-      externalId: account.accountId,
-      name: account.displayName ?? account.username,
-      handle: account.username,
-      status,
-      metadata: reason ? { disconnectReason: reason } : {},
-    })
-    .onConflictDoUpdate({
-      target: [channelAccounts.organizationId, channelAccounts.externalId],
-      set: { status, name: sql`excluded.name`, handle: sql`excluded.handle`, metadata: sql`${channelAccounts.metadata} || excluded.metadata`, updatedAt: sql`now()` },
-    });
+  await applyAccountSnapshot(db, {
+    externalId: account.accountId,
+    channel: account.platform,
+    name: account.displayName ?? account.username,
+    handle: account.username,
+    status,
+    metadata: reason ? { disconnectReason: reason } : {},
+  });
   return { kind: "account", accountExternalId: account.accountId, status };
 }
 

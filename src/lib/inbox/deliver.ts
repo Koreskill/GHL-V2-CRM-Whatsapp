@@ -29,13 +29,13 @@ export type TemplateInput = { name: string; language: string; params: string[] }
 // EL único camino de salida: envía por Zernio Y persiste. Nadie más inserta salientes.
 export async function deliverMessage(
   conversationId: string,
-  input: { source: DeliverSource; organizationId?: string } & ({ text: string; template?: undefined } | { template: TemplateInput; text?: undefined }),
+  input: { source: DeliverSource; organizationId: string } & ({ text: string; template?: undefined } | { template: TemplateInput; text?: undefined }),
 ): Promise<DeliverResult> {
   const db = getDb();
   const [conv] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!conv) return { ok: false, code: "not_found", error: "Conversación inexistente" };
-  // Guard de tenant: el camino humano pasa su organizationId; no puede escribir en otra inmobiliaria.
-  if (input.organizationId && conv.organizationId !== input.organizationId) {
+  // Guard de tenant: TODO llamador pasa su organizationId; ninguno puede escribir en otra inmobiliaria.
+  if (conv.organizationId !== input.organizationId) {
     return { ok: false, code: "not_found", error: "Conversación inexistente" };
   }
 

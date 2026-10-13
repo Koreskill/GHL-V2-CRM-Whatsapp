@@ -5,149 +5,10 @@ import { reportIncident, resolveIncidents } from "@/lib/incidents/report";
 import { safeError } from "@/lib/safe-error";
 import { readSheet } from "./client";
 import { mediaFromDescription } from "@/lib/properties/media";
-
-// ─── Mapeo de columnas ──────────────────────────────────────────────────────
-// Se reconoce el encabezado por varios nombres posibles, sin acentos ni mayúsculas, para que la
-// hoja no tenga que escribirse exactamente igual. Lo que no se reconoce se ignora: el sistema
-// NO completa características por su cuenta.
-const COLUMNS: Record<string, string[]> = {
-  externalId: ["property_id", "id", "id propiedad", "codigo", "código"],
-  title: ["titulo", "título", "nombre"],
-  status: ["estado", "disponibilidad"],
-  operation: ["operacion", "operación", "venta o alquiler", "tipo de operacion"],
-  propertyType: ["tipo de inmueble", "tipo", "tipo inmueble"],
-  price: ["precio", "valor"],
-  currency: ["moneda"],
-  addressPublic: ["direccion publicable", "dirección publicable", "direccion", "dirección"],
-  zone: ["barrio", "zona"],
-  city: ["ciudad", "localidad"],
-  mapUrl: ["ubicacion", "ubicación", "mapa", "ubicacion/mapa", "ubicación/mapa"],
-  areaM2: ["superficie total", "superficie", "sup total", "m2", "metros"],
-  areaCoveredM2: ["superficie cubierta", "sup cubierta", "m2 cubiertos"],
-  rooms: ["ambientes"],
-  bedrooms: ["dormitorios", "habitaciones"],
-  bathrooms: ["banos", "baños"],
-  parking: ["cocheras", "cochera", "garage", "garajes"],
-  amenities: ["amenities", "comodidades"],
-  description: ["descripcion", "descripción"],
-  coverUrl: ["url de portada", "portada", "url portada", "imagen principal"],
-  galleryUrls: ["urls de galeria", "urls de galería", "galeria", "galería", "fotos", "imagenes", "imágenes"],
-  videoUrl: ["url de video", "video", "url video"],
-  tour360Url: ["url de tour 360", "tour 360", "tour360", "url tour 360", "tour virtual"],
-  externalUpdatedAt: ["fecha de actualizacion", "fecha de actualización", "actualizado", "ultima actualizacion"],
-  sourceUrl: ["enlace original", "link original", "url original", "enlace"],
-  internalNotes: ["observaciones internas", "observaciones", "notas internas"],
-};
-
-const normalize = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-
-function mapHeader(header: string[]): Record<string, number> {
-  const index: Record<string, number> = {};
-  header.forEach((raw, i) => {
-    const name = normalize(raw);
-    for (const [field, aliases] of Object.entries(COLUMNS)) {
-      if (index[field] === undefined && aliases.some((a) => normalize(a) === name)) index[field] = i;
-    }
-  });
-  return index;
-}
-
-// ─── Normalización de valores ───────────────────────────────────────────────
-
-const OPERATIONS: Record<string, "venta" | "alquiler" | "temporario"> = {
-  venta: "venta",
-  vender: "venta",
-  alquiler: "alquiler",
-  alquilar: "alquiler",
-  renta: "alquiler",
-  temporario: "temporario",
-  temporal: "temporario",
-};
-
-const TYPES: Record<string, string> = {
-  departamento: "departamento",
-  depto: "departamento",
-  casa: "casa",
-  ph: "ph",
-  terreno: "terreno",
-  lote: "terreno",
-  local: "local",
-  oficina: "oficina",
-  cochera: "cochera",
-};
-
-const STATUSES: Record<string, string> = {
-  borrador: "borrador",
-  disponible: "disponible",
-  activa: "disponible",
-  activo: "disponible",
-  reservada: "reservada",
-  reservado: "reservada",
-  vendida: "vendida",
-  vendido: "vendida",
-  alquilada: "alquilada",
-  alquilado: "alquilada",
-  pausada: "pausada",
-  pausado: "pausada",
-};
-
-function num(value: string | undefined): string | null {
-  if (!value) return null;
-  // Tolera "USD 120.000", "120,000" y "1.250,50".
-  const cleaned = value.replace(/[^\d.,-]/g, "");
-  if (!cleaned) return null;
-  const normalized =
-    cleaned.includes(",") && cleaned.lastIndexOf(",") > cleaned.lastIndexOf(".")
-      ? cleaned.replace(/\./g, "").replace(",", ".")
-      : cleaned.replace(/,/g, "");
-  const n = Number(normalized);
-  return Number.isFinite(n) ? String(n) : null;
-}
-
-const int = (value: string | undefined): number | null => {
-  const n = num(value);
-  return n === null ? null : Math.round(Number(n));
-};
-
-// Solo se aceptan URLs http(s): una celda con una imagen pegada adentro no sirve, y un
-// javascript:/data: no tiene por qué terminar en el navegador de nadie.
-function url(value: string | undefined): string | null {
-  const raw = value?.trim();
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-const urlList = (value: string | undefined): string[] =>
-  (value ?? "")
-    .split(/[\n,;|]/)
-    .map((v) => url(v))
-    .filter((v): v is string => v !== null);
-
-const list = (value: string | undefined): string[] =>
-  (value ?? "")
-    .split(/[\n,;|]/)
-    .map((v) => v.trim())
-    .filter(Boolean);
-
-function date(value: string | undefined): Date | null {
-  const raw = value?.trim();
-  if (!raw) return null;
-  // dd/mm/aaaa es lo habitual en una hoja en castellano; Date lo leería como mm/dd.
-  const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
-  const parsed = dmy ? new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1])) : new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
+import {
+  date, inferOperation, int, list, mapHeader, needsReview, num, parseOperation, parseStatus, parseType, resolvePrice, url, urlFromFormula, urlList,
+  type Field,
+} from "./columns";
 
 export type SyncResult = {
   ok: boolean;
@@ -157,6 +18,8 @@ export type SyncResult = {
   issues: string[];
   error?: string;
   mode?: string;
+  /** Cómo se leyó el encabezado: qué columna se tomó para cada campo y cuáles no se usaron. */
+  columns?: { recognized: { header: string; field: string; how: string }[]; unrecognized: string[] };
 };
 
 /**
@@ -222,7 +85,8 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
     return result;
   }
 
-  const index = mapHeader(header);
+  const mapping = mapHeader(header);
+  const index = mapping.index;
   if (index.externalId === undefined) {
     const result: SyncResult = {
       ok: false,
@@ -230,7 +94,7 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
       upserted: 0,
       skipped: rows.length,
       issues: [],
-      error: "Falta la columna property_id, que es la que identifica cada propiedad",
+      error: `Falta la columna property_id, que es la que identifica cada propiedad. Columnas que encontré: ${header.filter((h) => h.trim()).join(", ")}`,
     };
     await markRun(result);
     await reportIncident({
@@ -243,12 +107,21 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
     return result;
   }
 
-  const cell = (row: string[], field: string) => {
+  const cell = (row: string[], field: Field) => {
     const i = index[field];
     return i === undefined ? undefined : row[i]?.trim() || undefined;
   };
+  // Todas las celdas de una fila por nombre de campo (para el precio y la operación).
+  const cells = (row: string[]) => Object.fromEntries((Object.keys(index) as Field[]).map((f) => [f, cell(row, f)])) as Partial<Record<Field, string | undefined>>;
 
   const issues: string[] = [];
+  // Columnas importantes que la hoja no trae: se avisa UNA vez, no en cada fila.
+  const hasPrice = ["price", "priceSale", "priceRent"].some((f) => index[f as Field] !== undefined);
+  if (index.operation === undefined && !(index.priceSale !== undefined && index.priceRent !== undefined)) {
+    issues.push("La hoja no tiene columna de operación (operation_type u operación): cada fila se deduce solo si tiene un único precio");
+  }
+  if (!hasPrice) issues.push("La hoja no tiene ninguna columna de precio (price_sale_amount, price_rent_amount o precio)");
+  if (index.title === undefined) issues.push("La hoja no tiene columna de título (listing_title o título)");
   const seenIds = new Set<string>();
   let upserted = 0;
   let skipped = 0;
@@ -298,31 +171,63 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
     // Qué le falta a ESTA propiedad. Se guarda con ella para que la ficha lo señale.
     const rowIssues: string[] = [];
 
-    const operationRaw = normalize(cell(row, "operation") ?? "");
-    const operation = OPERATIONS[operationRaw];
+    // La operación sale de su columna; si la hoja no la trae, solo se deduce cuando hay UN precio posible.
+    const operationRaw = cell(row, "operation");
+    const operation = operationRaw ? parseOperation(operationRaw) : inferOperation(cells(row));
     if (!operation) {
       skipped++;
-      issues.push(`Fila ${line}: operación "${cell(row, "operation") ?? ""}" no reconocida (venta o alquiler)`);
+      issues.push(
+        operationRaw
+          ? /venta/i.test(operationRaw) && /alquiler|renta|rent/i.test(operationRaw)
+            ? `Fila ${line}: operación "${operationRaw}": ofrece venta Y alquiler y el CRM maneja una operación por propiedad; elegí una en la hoja`
+            : `Fila ${line}: operación "${operationRaw}" no reconocida (venta, alquiler o temporario)`
+          : `Fila ${line}: sin operación y no se puede deducir (hay precio de venta y de alquiler, o ninguno)`,
+      );
       continue;
     }
 
-    const typeRaw = normalize(cell(row, "propertyType") ?? "");
-    const propertyType = (TYPES[typeRaw] ?? "otro") as "otro";
-    if (!TYPES[typeRaw]) rowIssues.push("Tipo de inmueble no reconocido, quedó como «otro»");
+    const typeRaw = cell(row, "propertyType");
+    const parsedType = parseType(typeRaw);
+    const propertyType = (parsedType ?? "otro") as "otro";
+    if (!parsedType) rowIssues.push(typeRaw ? `Tipo de inmueble "${typeRaw}" no reconocido, quedó como «otro»` : "Sin tipo de inmueble, quedó como «otro»");
 
-    const statusRaw = normalize(cell(row, "status") ?? "");
-    const status = (STATUSES[statusRaw] ?? "disponible") as "disponible";
-    if (statusRaw && !STATUSES[statusRaw]) rowIssues.push(`Estado "${cell(row, "status")}" no reconocido`);
+    const statusRaw = cell(row, "status");
+    const parsedStatus = parseStatus(statusRaw);
+    const status = (parsedStatus ?? "disponible") as "disponible";
+    if (statusRaw && !parsedStatus) rowIssues.push(`Estado "${statusRaw}" no reconocido, se tomó como disponible`);
+    if (needsReview(statusRaw)) rowIssues.push("La hoja la marcó para revisar");
 
-    const price = num(cell(row, "price"));
-    if (!price) rowIssues.push("Sin precio");
-    const coverUrl = url(cell(row, "coverUrl"));
+    // Precio: el de venta o el de alquiler según la operación de esta fila.
+    const priced = resolvePrice(operation, cells(row));
+    if (!priced.price) rowIssues.push("Sin precio");
+    if (priced.note) rowIssues.push(priced.note);
+    if (priced.price && !priced.currency) rowIssues.push("Moneda sin indicar: se asumió USD");
+
+    // Portada: su columna, o el enlace de la vista previa si la hoja solo trae esa.
+    const coverUrl = url(cell(row, "coverUrl")) ?? urlFromFormula(cell(row, "coverUrl")) ?? urlFromFormula(cell(row, "coverPreview"));
     if (cell(row, "coverUrl") && !coverUrl) rowIssues.push("La portada no es un enlace válido");
-    if (!cell(row, "coverUrl")) rowIssues.push("Sin portada");
+    if (!cell(row, "coverUrl") && !coverUrl) rowIssues.push("Sin portada");
     if (!cell(row, "title")) rowIssues.push("Sin título");
+
+    // La hoja marca por sí misma qué dato no es confiable: se muestra tal cual en la ficha.
+    const quality = cell(row, "qualityNote");
+    if (quality) rowIssues.push(`Nota de calidad de la hoja: ${quality.slice(0, 200)}`);
 
     // Enlaces escritos en la descripción: completan las columnas vacías, nunca las pisan.
     const fromText = mediaFromDescription(cell(row, "description"));
+
+    // Lo que no tiene columna propia en el modelo va en features, con el nombre que la ficha entiende.
+    const extra: Record<string, unknown> = {};
+    const put = (key: string, value: unknown) => {
+      if (value !== null && value !== undefined && value !== "") extra[key] = value;
+    };
+    put("ambientes", int(cell(row, "rooms")));
+    put("toilettes", int(cell(row, "toilettes")));
+    put("terreno_m2", num(cell(row, "landAreaM2")));
+    put("semicubierta_m2", num(cell(row, "areaSemiCoveredM2")));
+    put("superficie_texto", cell(row, "areaRaw"));
+    put("superficie_tipo", cell(row, "areaKind"));
+    put("precio_texto", cell(row, "priceSourceText"));
 
     const values = {
       organizationId: orgId,
@@ -333,8 +238,8 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
       status,
       title: cell(row, "title") ?? null,
       description: cell(row, "description") ?? null,
-      price,
-      currency: (cell(row, "currency") ?? "USD").toUpperCase().slice(0, 8),
+      price: priced.price,
+      currency: priced.currency ?? "USD",
       addressPublic: cell(row, "addressPublic") ?? null,
       zone: cell(row, "zone") ?? null,
       city: cell(row, "city") ?? null,
@@ -355,8 +260,7 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
       syncedAt: new Date(),
       syncStatus: rowIssues.length ? "error" : "ok",
       syncIssues: rowIssues,
-      // Los ambientes no tienen columna propia en el modelo: van en features.
-      features: cell(row, "rooms") ? { ambientes: int(cell(row, "rooms")) } : {},
+      features: extra,
     };
 
     await db
@@ -433,6 +337,7 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
     skipped,
     issues,
     mode: sheet.mode,
+    columns: { recognized: mapping.recognized, unrecognized: mapping.unrecognized },
   };
   await markRun(result);
 

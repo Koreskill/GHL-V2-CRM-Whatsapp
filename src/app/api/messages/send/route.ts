@@ -1,4 +1,5 @@
 import { authorize, isUuid, jsonError } from "@/lib/api";
+import { recordDraftReview } from "@/lib/agent/triage/queries";
 import { deliverMessage, type TemplateInput } from "@/lib/inbox/deliver";
 
 const MAX_LENGTH = 4096;
@@ -37,7 +38,18 @@ export async function POST(req: Request) {
     result = await deliverMessage(body.conversationId, { text: body.text, source: "human", organizationId: auth.session.organizationId });
   }
 
-  if (result.ok) return Response.json({ message: result.message });
+  if (result.ok) {
+    if (typeof body.text === "string") {
+      await recordDraftReview({
+        conversationId: body.conversationId as string,
+        orgId: auth.session.organizationId,
+        userId: auth.session.user.id,
+        sentText: body.text,
+        sentMessageId: result.message.id,
+      }).catch(() => {});
+    }
+    return Response.json({ message: result.message });
+  }
   const status = { not_found: 404, empty: 400, window_closed: 409, send_failed: 502, invalid_template: 422 }[result.code];
   return Response.json({ error: result.error, code: result.code, message: result.message ?? null }, { status });
 }
