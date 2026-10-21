@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Megaphone } from "lucide-react";
+import { Megaphone, Plus } from "lucide-react";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
 import { requireRole } from "@/lib/auth";
-import { listBatches } from "@/lib/campaigns/batches";
+import { BATCH_STATUS_LABEL, listBatches } from "@/lib/campaigns/batches";
 import { formatListDate } from "@/lib/format";
 
 export const metadata = { title: "Campañas · Setter CRM" };
@@ -15,13 +15,21 @@ export default async function CampanasPage() {
 
   return (
     <>
-      <PageHeader title="Campañas" subtitle="Estimá el costo con los filtros de Contactos y confirmá el envío por lote" />
+      <PageHeader
+        title="Campañas"
+        subtitle="Plantillas de WhatsApp a grupos, etiquetas o segmentos. Se estima, se congela la audiencia y recién ahí se programa o envía."
+        actions={
+          <Link href="/contactos/campanas/nueva" className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[13.5px] font-medium text-white hover:bg-primary-hover">
+            <Plus className="size-4" strokeWidth={2} /> Nueva campaña
+          </Link>
+        }
+      />
       <Card className="overflow-hidden">
         {batches.length === 0 ? (
           <EmptyState
             icon={Megaphone}
             title="Todavía no hay campañas"
-            description="Filtrá contactos y usá «Estimar campaña» para calcular audiencia y costo."
+            description="Creá una eligiendo la cuenta que envía y a quién: grupos, etiquetas o segmentos."
             className="py-20"
           />
         ) : (
@@ -33,8 +41,10 @@ export default async function CampanasPage() {
                     <span className="block truncate text-[14px] font-medium text-ink">{b.name}</span>
                     <span className="block text-[12px] text-muted">{b.templateName} · {formatListDate(b.createdAt.toISOString())}</span>
                   </span>
-                  <span className="text-[12.5px] text-muted">{b.audienceCount} destinatarios</span>
-                  <span className="rounded-md bg-field px-2 py-0.5 text-[12px] text-ink">{b.status}</span>
+                  <span className="text-[12.5px] text-muted">
+                    {b.sentCount > 0 ? `${b.sentCount} de ${b.audienceCount} aceptados` : `${b.audienceCount} destinatarios`}
+                  </span>
+                  <span className="rounded-md bg-field px-2 py-0.5 text-[12px] text-ink">{BATCH_STATUS_LABEL[b.status] ?? b.status}</span>
                 </Link>
               </li>
             ))}

@@ -16,7 +16,19 @@ export type LabScenario = {
   key: string;
   title: string;
   checks: string;
+  /** Si se declara, la conversación de prueba "viene de un anuncio" con este referral (como lo guarda el webhook). */
+  attribution?: Record<string, unknown>;
   turns: { client: string; expect?: TurnExpect }[];
+};
+
+// Referral de un Click-to-WhatsApp, con la forma que documenta el OpenAPI de Zernio. Datos de ejemplo.
+const ANUNCIO_DE_PRUEBA = {
+  ctwa_clid: "lab-clid-0001",
+  source_id: "120000000000001",
+  source_type: "ad",
+  headline: "Departamentos de 2 ambientes en el centro",
+  body: "Consultá disponibilidad y condiciones.",
+  media_type: "image",
 };
 
 const noPlazo = { pattern: /\ben\s+(24|48|72)\s*(hs|horas)\b|\bhoy mismo\b/i, why: "Prometió un plazo que la inmobiliaria no definió" };
@@ -106,6 +118,18 @@ export const LAB_SCENARIOS: LabScenario[] = [
     turns: [{ client: "GANA DINERO RAPIDO!!! entra a http://ejemplo-spam.invalid y multiplica tu inversion 10x", expect: { disposition: ["descartar"] } }],
   },
   {
+    key: "anuncio_primer_contacto",
+    title: "Llega desde un anuncio (primeras respuestas)",
+    checks:
+      "Con el guion de primeras respuestas activo, sigue el paso que toca, no repite lo que ya dijo la persona y no inventa datos del anuncio. Sin guion, responde normal.",
+    attribution: ANUNCIO_DE_PRUEBA,
+    turns: [
+      { client: "Hola! Vi su anuncio y quiero más información", expect: { disposition: ["responder"], forbid: [noPlazo, noConfirma] } },
+      { client: "Quiero comprar", expect: { disposition: ["responder"], forbid: [noPlazo, noConfirma] } },
+      { client: "En Pichincha, hasta 90 mil dólares", expect: { disposition: ["responder"], forbid: [noPlazo, noConfirma] } },
+    ],
+  },
+  {
     key: "cambio_operacion",
     title: "Conversación de varios turnos con cambio de operación",
     checks: "Si pasa de comprar a alquilar, no ofrece la venta anterior como alternativa.",
@@ -118,4 +142,5 @@ export const LAB_SCENARIOS: LabScenario[] = [
 
 export const SCENARIO_KEYS = LAB_SCENARIOS.map((s) => s.key);
 export const MAX_TURNS_PER_SCENARIO = 6;
-export const MAX_SCENARIOS_PER_RUN = 12;
+// Holgura sobre la cantidad actual: "correr todos" tiene que significar todos.
+export const MAX_SCENARIOS_PER_RUN = 16;

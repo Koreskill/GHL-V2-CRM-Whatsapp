@@ -45,7 +45,7 @@ export function personalizeParams(params: string[], contactName: string | null |
 
 export const usesName = (params: string[]) => params.some((p) => /\{nombre\}/i.test(p));
 
-export type AudienceRow = { contactId: string; name: string | null; conversationId: string | null };
+export type AudienceRow = { contactId: string; name: string | null; conversationId: string | null; optedOut?: boolean };
 
 /** Separa a los elegibles de los excluidos y cuenta el motivo de cada exclusión. */
 export function splitAudience(rows: AudienceRow[], params: string[]) {
@@ -55,7 +55,8 @@ export function splitAudience(rows: AudienceRow[], params: string[]) {
     excluded[reason] = (excluded[reason] ?? 0) + 1;
   };
   for (const r of rows) {
-    if (!r.conversationId) skip("sin_whatsapp");
+    if (r.optedOut) skip("baja");
+    else if (!r.conversationId) skip("sin_whatsapp");
     else if (personalizeParams(params, r.name) === null) skip("variable_vacia");
     else eligible.push({ ...r, conversationId: r.conversationId });
   }
@@ -63,6 +64,7 @@ export function splitAudience(rows: AudienceRow[], params: string[]) {
 }
 
 export const EXCLUSION_LABEL: Record<string, string> = {
-  sin_whatsapp: "No tiene conversación de WhatsApp",
+  sin_whatsapp: "No tiene conversación de WhatsApp en la cuenta emisora",
+  baja: "Pidió no recibir mensajes comerciales",
   variable_vacia: "Una variable de la plantilla queda vacía (por ejemplo, no tiene nombre)",
 };

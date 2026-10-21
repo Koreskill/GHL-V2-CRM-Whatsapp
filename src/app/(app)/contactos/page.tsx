@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { GitBranch, Megaphone, MessageCircle, Search, Users, X } from "lucide-react";
+import { Copy, GitBranch, Layers, Megaphone, MessageCircle, Search, Users, X } from "lucide-react";
 import { ChannelBadge } from "@/components/channel-badge";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { ContactPanel } from "@/components/contacts/contact-panel";
@@ -13,7 +13,11 @@ import { properties } from "@/db/schema";
 import { contactFiltersToParams, hasContactFilters, parseContactFilters, type ContactFilters } from "@/lib/crm/contact-filters";
 import { getContactDetail } from "@/lib/crm/contact-detail";
 import { listContactViews } from "@/lib/crm/views";
-import { deleteContactView, saveContactView } from "./actions";
+import { describeFilters } from "@/lib/crm/describe-filters";
+import { contactFiltersFromJson } from "@/lib/crm/contact-filters";
+import { labelsForContacts, listGroups, listLabels } from "@/lib/crm/groups";
+import { LABEL_TONE } from "@/components/contacts/label-tone";
+import { bulkContactsAction, deleteContactView, saveContactView } from "./actions";
 import { countContacts, listContacts } from "@/lib/crm/queries";
 import { getContactTagSummaries } from "@/lib/crm/tags";
 import { formatListDate, initials } from "@/lib/format";
@@ -40,13 +44,18 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
   const page = Math.max(1, Number(typeof sp.pagina === "string" ? sp.pagina : 1) || 1);
   const contactId = typeof sp.contacto === "string" ? sp.contacto : null;
 
-  const [contacts, total, matched, views, detail] = await Promise.all([
+  const [contacts, total, matched, views, detail, groups, labels] = await Promise.all([
     listContacts(orgId, { ...filters, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
     countContacts(orgId),
     countContacts(orgId, filters),
     listContactViews(orgId, session.user.id),
     contactId && /^[0-9a-f-]{36}$/i.test(contactId) ? getContactDetail(orgId, contactId) : Promise.resolve(null),
+    listGroups(orgId),
+    listLabels(orgId),
   ]);
+  const labelsByContact = await labelsForContacts(orgId, contacts.map((c) => c.id));
+  const names = { labels: new Map(labels.map((l) => [l.id, l.name])), groups: new Map(groups.map((g) => [g.id, g.name])) };
+  const notice = typeof sp.aviso === "string" ? sp.aviso : null;
   const propertyOptions = await getDb()
     .select({ id: properties.id, title: properties.title })
     .from(properties)
@@ -61,14 +70,32 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
 
   return (
     <>
-      <PageHeader title="Contactos" subtitle={`${total} ${total === 1 ? "persona" : "personas"} que escribieron por algún canal`} />
+      <PageHeader
+        title="Contactos"
+        subtitle={`${total} ${total === 1 ? "persona" : "personas"} que escribieron por algún canal`}
+        actions={
+          <div className="flex gap-2">
+            <Link href="/contactos/organizar" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field">
+              <Layers className="size-4" strokeWidth={1.7} /> Grupos y etiquetas
+            </Link>
+            <Link href="/contactos/duplicados" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3.5 text-[13.5px] font-medium text-ink hover:bg-field">
+              <Copy className="size-4" strokeWidth={1.7} /> Posibles duplicados
+            </Link>
+          </div>
+        }
+      />
+      {notice && <p className="mb-4 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-ink">{notice}</p>}
 
       {views.length > 0 && (
         <div className="mb-3 flex flex-wrap items-center gap-1.5">
-          <span className="text-[11.5px] font-semibold tracking-wide text-muted uppercase">Vistas</span>
+          <span className="text-[11.5px] font-semibold tracking-wide text-muted uppercase" title="Un segmento es un criterio guardado: se vuelve a calcular cada vez que se usa">Segmentos</span>
           {views.map((v) => (
             <span key={v.id} className="inline-flex items-center gap-1 rounded-full border border-line bg-card pl-3 text-[12.5px] text-ink">
-              <Link href={v.query ? `/contactos?${v.query}` : "/contactos"} className="py-1 hover:underline">
+              <Link
+                href={v.query ? `/contactos?${v.query}` : "/contactos"}
+                title={`Criterio: ${describeFilters(contactFiltersFromJson(Object.fromEntries(new URLSearchParams(v.query))), names).join(", ") || "todos"}`}
+                className="py-1 hover:underline"
+              >
                 {v.name}
                 {v.shared && <span className="ml-1 text-muted">· compartida</span>}
               </Link>
@@ -177,6 +204,36 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
             </select>
           </label>
           <label className="flex flex-col gap-1 text-[11.5px] text-muted">
+            Etiqueta
+            <select name="etiqueta" defaultValue={filters.labelId ?? ""} className={field}>
+              <option value="">Cualquiera</option>
+              {labels.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[11.5px] text-muted">
+            Grupo
+            <select name="grupo" defaultValue={filters.groupId ?? ""} className={field}>
+              <option value="">Cualquiera</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[11.5px] text-muted">
+            Mensajes comerciales
+            <select name="baja" defaultValue={filters.optOut ?? ""} className={field}>
+              <option value="">Todos</option>
+              <option value="no">Sin baja</option>
+              <option value="si">Pidieron la baja</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[11.5px] text-muted">
             Temperatura
             <select name="temperatura" defaultValue={filters.temperature ?? ""} className={field}>
               <option value="">Cualquiera</option>
@@ -214,15 +271,16 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
       {filtered && (
         <form action={saveContactView} className="mb-5 flex flex-wrap items-center gap-2">
           <input type="hidden" name="f" value={filtersQs} />
-          <input name="name" required maxLength={60} placeholder="Guardar estos filtros como vista…" className={`${field} w-64`} />
+          <input name="name" required maxLength={60} placeholder="Guardar estos filtros como segmento…" className={`${field} w-64`} />
           {session.role === "admin" && (
             <label className="flex items-center gap-1.5 text-[12.5px] text-muted">
               <input type="checkbox" name="shared" className="size-4 accent-[var(--color-primary)]" /> Compartir con el equipo
             </label>
           )}
           <button type="submit" className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-[12.5px] text-ink hover:bg-field">
-            Guardar vista
+            Guardar segmento
           </button>
+          <span className="text-[12px] text-muted">Criterio: {describeFilters(filters, names).join(", ")}. Es dinámico: se recalcula cada vez que se usa.</span>
         </form>
       )}
 
@@ -239,10 +297,63 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
             />
           )
         ) : (
+          <form action={bulkContactsAction}>
+          <input type="hidden" name="f" value={filtersQs} />
+          <div className="flex flex-wrap items-center gap-2 border-b border-line bg-field/40 px-6 py-2.5 text-[12.5px]">
+            <span className="text-muted">Con los tildados:</span>
+            <select name="op" defaultValue="" className={field} aria-label="Acción en bloque">
+              <option value="" disabled>
+                Elegí una acción…
+              </option>
+              {groups.length > 0 && (
+                <optgroup label="Agregar al grupo">
+                  {groups.map((g) => (
+                    <option key={`ga${g.id}`} value={`group:add:${g.id}`}>{g.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {groups.length > 0 && (
+                <optgroup label="Quitar del grupo">
+                  {groups.map((g) => (
+                    <option key={`gr${g.id}`} value={`group:remove:${g.id}`}>{g.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {labels.length > 0 && (
+                <optgroup label="Poner etiqueta">
+                  {labels.map((l) => (
+                    <option key={`la${l.id}`} value={`label:add:${l.id}`}>{l.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {labels.length > 0 && (
+                <optgroup label="Quitar etiqueta">
+                  {labels.map((l) => (
+                    <option key={`lr${l.id}`} value={`label:remove:${l.id}`}>{l.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="Mensajes comerciales">
+                <option value="optout:on">Marcar baja</option>
+                <option value="optout:off">Quitar baja</option>
+              </optgroup>
+            </select>
+            <label className="flex items-center gap-1.5 text-muted">
+              <input type="checkbox" name="scope" value="all" className="size-4 accent-[var(--color-primary)]" />
+              Aplicar a los {Math.min(matched, 1000)} que cumplen el filtro
+            </label>
+            <button type="submit" className="inline-flex h-8 items-center rounded-lg border border-line bg-card px-3 text-[12.5px] font-medium text-ink hover:bg-field">
+              Aplicar
+            </button>
+            {groups.length === 0 && labels.length === 0 && (
+              <Link href="/contactos/organizar" className="text-primary hover:underline">Crear grupos o etiquetas</Link>
+            )}
+          </div>
           <table className="w-full text-left text-[13.5px]">
             <thead>
               <tr className="border-b border-line text-[11.5px] font-semibold tracking-wide text-muted uppercase">
-                <th className="px-6 py-3 font-semibold">Contacto</th>
+                <th className="w-8 py-3 pl-6"><span className="sr-only">Seleccionar</span></th>
+                <th className="px-3 py-3 font-semibold">Contacto</th>
                 <th className="px-4 py-3 font-semibold">Canales</th>
                 <th className="px-4 py-3 font-semibold">Teléfono</th>
                 <th className="px-4 py-3 font-semibold">Etiquetas</th>
@@ -253,7 +364,10 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
             <tbody>
               {contacts.map((c) => (
                 <tr key={c.id} className="border-b border-line/70 last:border-0 hover:bg-field/50">
-                  <td className="px-6 py-3.5">
+                  <td className="py-3.5 pl-6">
+                    <input type="checkbox" name="ids" value={c.id} aria-label={`Seleccionar a ${c.name}`} className="size-4 accent-[var(--color-primary)]" />
+                  </td>
+                  <td className="px-3 py-3.5">
                     <span className="flex items-center gap-3">
                       <span className="grid size-8 shrink-0 place-items-center rounded-full bg-field text-[11.5px] font-semibold text-muted">
                         {initials(c.name)}
@@ -280,6 +394,13 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
                   <td className="px-4 py-3.5 text-ink">{c.phone ?? <span className="text-muted">—</span>}</td>
                   <td className="px-4 py-3.5">
                     <ContactTagsBar summary={tagsByContact.get(c.id) ?? null} compact />
+                    {(labelsByContact.get(c.id) ?? []).length > 0 && (
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        {labelsByContact.get(c.id)!.map((l) => (
+                          <span key={l.id} className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", LABEL_TONE[l.color])}>{l.name}</span>
+                        ))}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3.5 text-muted">{c.lastMessageAt ? formatListDate(c.lastMessageAt) : "—"}</td>
                   <td className="px-6 py-3.5">
@@ -311,6 +432,7 @@ export default async function ContactosPage({ searchParams }: PageProps<"/contac
               ))}
             </tbody>
           </table>
+          </form>
         )}
       </Card>
 

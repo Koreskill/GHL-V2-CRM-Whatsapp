@@ -23,6 +23,57 @@ function fail(path: string, motivo: string): never {
   redirect(`${path}?error=${encodeURIComponent(motivo)}`);
 }
 
+// ─── Ciclo de vida de una inmobiliaria (ver lib/agency/org-lifecycle.ts) ────
+// Solo la agencia. Cada transición queda en audit_logs. Eliminar exige suspender antes y escribir el nombre.
+
+export async function suspendOrgAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) redirect("/agencia");
+  const back = `/agencia/${orgId}`;
+  if (orgId === session.homeOrganizationId) fail(back, "No se puede suspender la inmobiliaria de la propia agencia.");
+  const reason = field(formData, "reason", 200) || null;
+  const { suspendOrganization } = await import("@/lib/agency/org-lifecycle");
+  const res = await suspendOrganization(orgId, reason);
+  if (!res.ok) fail(back, res.error);
+  await writeAudit({ actorUserId: session.user.id, actingAsOrganizationId: orgId, action: "org.suspend", target: `organization:${orgId}`, metadata: { reason, ...res.detail } });
+  revalidatePath(back);
+  revalidatePath("/agencia");
+  redirect(`${back}?ciclo=suspendida`);
+}
+
+export async function reactivateOrgAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) redirect("/agencia");
+  const back = `/agencia/${orgId}`;
+  const { reactivateOrganization } = await import("@/lib/agency/org-lifecycle");
+  const res = await reactivateOrganization(orgId);
+  if (!res.ok) fail(back, res.error);
+  await writeAudit({ actorUserId: session.user.id, actingAsOrganizationId: orgId, action: "org.reactivate", target: `organization:${orgId}` });
+  revalidatePath(back);
+  revalidatePath("/agencia");
+  redirect(`${back}?ciclo=reactivada`);
+}
+
+export async function deleteOrgAction(formData: FormData) {
+  const session = await requireAgencyAdmin();
+  if (!session) redirect("/");
+  const orgId = field(formData, "organizationId");
+  if (!isUuid(orgId)) redirect("/agencia");
+  const back = `/agencia/${orgId}`;
+  if (orgId === session.homeOrganizationId) fail(back, "No se puede eliminar la inmobiliaria de la propia agencia.");
+  if (formData.get("exported") !== "on") fail(back, "Confirmá que la exportación de datos ya se entregó (o que no corresponde).");
+  const { anonymizeOrganization } = await import("@/lib/agency/org-lifecycle");
+  const res = await anonymizeOrganization(orgId, field(formData, "typedName", 200));
+  if (!res.ok) fail(back, res.error);
+  await writeAudit({ actorUserId: session.user.id, actingAsOrganizationId: orgId, action: "org.anonymize", target: `organization:${orgId}`, metadata: res.detail ?? {} });
+  revalidatePath("/agencia");
+  redirect(`${back}?ciclo=eliminada`);
+}
+
 // Alta de cliente: crea la inmobiliaria y su primer usuario administrador en un solo paso.
 // La contraseña la elige (o genera) el dueño de la agencia en el formulario y se la pasa al cliente:
 // nunca vuelve por la URL ni queda en un log.

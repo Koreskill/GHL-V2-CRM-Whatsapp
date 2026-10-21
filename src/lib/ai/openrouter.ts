@@ -75,12 +75,20 @@ async function logUsage(o: {
       promptTokens: o.usage?.prompt_tokens ?? null,
       completionTokens: o.usage?.completion_tokens ?? null,
       totalTokens: o.usage?.total_tokens ?? null,
+      // OpenRouter devuelve el costo en usage.cost (USD) cuando se pide usage.include. Si no viene, queda null:
+      // en los reportes eso se muestra como "sin costo informado", nunca como 0.
+      costUsd: costOf(o.usage),
       latencyMs: o.latencyMs,
       status: o.status,
       error: o.error ?? null,
       requestRef: o.requestRef ?? null,
     })
     .catch(() => {});
+}
+
+function costOf(usage: ChatCompletion["usage"] | null | undefined): string | null {
+  const cost = (usage as { cost?: unknown } | null | undefined)?.cost;
+  return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? String(cost) : null;
 }
 
 // Chat completion vía OpenRouter con registro de uso. Tira excepción en error (el llamador la atrapa);
@@ -100,7 +108,8 @@ export async function aiChatComplete(opts: {
   const started = Date.now();
   try {
     // params (config de la org) pisa los defaults del body (temperature, etc.).
-    const completion = await c.chat.completions.create({ model: opts.model, ...opts.body, ...opts.params });
+    // usage.include: OpenRouter agrega el costo real de la llamada a la respuesta (contabilidad por cliente).
+    const completion = await c.chat.completions.create({ model: opts.model, ...opts.body, ...opts.params, usage: { include: true } } as typeof opts.body & { model: string });
     await logUsage({
       organizationId: opts.organizationId,
       fn: opts.fn,

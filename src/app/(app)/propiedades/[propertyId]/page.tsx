@@ -97,7 +97,7 @@ export default async function PropiedadPage({ params, searchParams }: PageProps<
       )}
       {pubFlag && (
         <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">
-          {pubFlag === "publicada" ? "Ficha publicada." : pubFlag === "pausada" ? "Ficha pausada: el enlace dejó de funcionar." : pubFlag === "bloqueada" ? "No se pudo publicar: revisá lo que falta." : "Configuración guardada."}
+          {pubFlag === "publicada" ? "Ficha publicada." : pubFlag === "pausada" ? "Ficha pausada: el enlace dejó de funcionar." : pubFlag === "bloqueada" ? "No se pudo publicar: revisá lo que falta." : pubFlag === "solo_admin" ? "Publicar en internet lo hace un administrador. La configuración quedó guardada para que la revise." : "Configuración guardada."}
         </p>
       )}
       {resync && (

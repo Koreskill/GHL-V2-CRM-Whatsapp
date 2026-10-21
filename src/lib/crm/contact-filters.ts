@@ -20,6 +20,12 @@ export type ContactFilters = {
   currency?: "USD" | "ARS";
   operation?: "venta" | "alquiler" | "temporario";
   temperature?: "frio" | "tibio" | "caliente";
+  /** Tiene esta etiqueta. */
+  labelId?: string;
+  /** Pertenece a este grupo. */
+  groupId?: string;
+  /** "si" = solo quienes pidieron la baja de mensajes comerciales; "no" = excluirlos. */
+  optOut?: "si" | "no";
 };
 
 const CHANNELS = ["whatsapp", "instagram", "facebook"] as const;
@@ -62,6 +68,9 @@ export function parseContactFilters(params: Params): ContactFilters {
     currency: pick(CURRENCIES, one(params, "moneda")),
     operation: pick(OPERATIONS, one(params, "operacion")),
     temperature: pick(TEMPS, one(params, "temperatura")),
+    labelId: UUID.test(one(params, "etiqueta")) ? one(params, "etiqueta") : undefined,
+    groupId: UUID.test(one(params, "grupo")) ? one(params, "grupo") : undefined,
+    optOut: pick(["si", "no"] as const, one(params, "baja")),
   };
 }
 
@@ -81,6 +90,9 @@ export function contactFiltersToParams(f: ContactFilters): URLSearchParams {
   set("moneda", f.currency);
   set("operacion", f.operation);
   set("temperatura", f.temperature);
+  set("etiqueta", f.labelId);
+  set("grupo", f.groupId);
+  set("baja", f.optOut);
   return p;
 }
 
@@ -117,6 +129,15 @@ export function contactWhere(orgId: string, f: ContactFilters): SQL {
   }
 
   if (f.temperature) parts.push(sql`c.temperature = ${f.temperature}::lead_temperature`);
+
+  if (f.labelId) {
+    parts.push(sql`exists (select 1 from contact_label_links ll where ll.contact_id = c.id and ll.organization_id = ${orgId} and ll.label_id = ${f.labelId})`);
+  }
+  if (f.groupId) {
+    parts.push(sql`exists (select 1 from contact_group_members gm where gm.contact_id = c.id and gm.organization_id = ${orgId} and gm.group_id = ${f.groupId})`);
+  }
+  if (f.optOut === "si") parts.push(sql`c.marketing_opt_out_at is not null`);
+  if (f.optOut === "no") parts.push(sql`c.marketing_opt_out_at is null`);
 
   if (f.propertyId) {
     parts.push(sql`exists (

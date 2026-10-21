@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { AlertTriangle, Building2, Lock, LockOpen, Plus, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, Building2, Lock, LockOpen, Plus, RefreshCw, Search, Settings } from "lucide-react";
 import { Card, EmptyState, PageHeader } from "@/components/ui/primitives";
-import { requireOrgId } from "@/lib/auth";
+import { getSession, requireOrgId } from "@/lib/auth";
 import { formatListDate } from "@/lib/format";
 import { countCatalog, getSyncConfig, listCatalog, listZones, type PropertyFilters } from "@/lib/properties/catalog";
 import { cn } from "@/lib/utils";
@@ -73,6 +73,7 @@ function Chip({ href, active, children }: { href: string; active: boolean; child
 
 export default async function PropiedadesPage({ searchParams }: PageProps<"/propiedades">) {
   const orgId = await requireOrgId();
+  const isAdmin = (await getSession())?.role === "admin";
   const params = await searchParams;
   const filters = parse(params);
 
@@ -100,6 +101,16 @@ export default async function PropiedadesPage({ searchParams }: PageProps<"/prop
                   Sincronizar
                 </button>
               </form>
+            )}
+            {isAdmin && (
+              <Link
+                href="/propiedades/fuente"
+                title="Configurar la hoja de propiedades"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-card px-3 text-[13.5px] font-medium text-ink hover:bg-field"
+              >
+                <Settings className="size-4" strokeWidth={1.7} />
+                <span className="sr-only">Configurar la hoja de propiedades</span>
+              </Link>
             )}
             <Link
               href="/propiedades/nueva"

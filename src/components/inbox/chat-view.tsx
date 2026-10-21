@@ -9,6 +9,7 @@ import { dayOf, formatDayDivider, formatRemaining, formatTime } from "@/lib/form
 import type { ChatMessage, ConversationDetail } from "@/lib/inbox/queries";
 import type { ContactTagSummary } from "@/lib/crm/tag-labels";
 import { cn } from "@/lib/utils";
+import { AdOriginBanner } from "./ad-origin";
 import { Avatar } from "./avatar";
 import { ConversationActions } from "./conversation-actions";
 import { RecommendationsPanel } from "./recommendations-panel";
@@ -206,6 +207,8 @@ export function ChatView({
         <ConversationActions conversationId={conversation.id} status={conversation.status} delegation={delegation} canDelegate={canDelegate} />
       </header>
 
+      {conversation.adOrigin && <AdOriginBanner origin={conversation.adOrigin} />}
+
       {conversation.delegatedFrom && (
         <p role="status" className="border-b border-line bg-accent-amber/10 px-6 py-2 text-[12.5px] text-ink">
           Expediente delegado por {conversation.delegatedFrom}. Es de solo lectura: no se puede responder por el canal original desde acá.
@@ -286,6 +289,32 @@ export function ChatView({
   );
 }
 
+// Marca una respuesta del agente para que un admin la revise (Configuración → Mejora del agente).
+function ReportButton({ messageId }: { messageId: string }) {
+  const [state, setState] = useState<"idle" | "sending" | "done" | "error">("idle");
+  if (!/^[0-9a-f-]{36}$/i.test(messageId)) return null;
+  return (
+    <button
+      type="button"
+      disabled={state === "sending" || state === "done"}
+      title={state === "done" ? "Reportada: la revisa un administrador" : "Reportar esta respuesta como problemática"}
+      onClick={async () => {
+        const note = window.prompt("¿Qué estuvo mal en esta respuesta? (opcional)") ?? "";
+        setState("sending");
+        const res = await fetch("/api/agent-feedback", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ messageId, note }),
+        }).catch(() => null);
+        setState(res?.ok ? "done" : "error");
+      }}
+      className="ml-auto rounded px-1 normal-case tracking-normal underline-offset-2 hover:underline disabled:no-underline"
+    >
+      {state === "done" ? "Reportada" : state === "error" ? "No se pudo" : "Reportar"}
+    </button>
+  );
+}
+
 function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () => void }) {
   const out = m.direction === "outbound";
   const text = m.body ?? (m.type !== "text" ? `[${m.type}]` : "");
@@ -301,6 +330,12 @@ function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () =
         {m.source === "agent" && (
           <span className={cn("mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide", out ? "text-white/70" : "text-muted")}>
             <Bot className="size-3" /> Agente IA
+            <ReportButton messageId={m.id} />
+          </span>
+        )}
+        {(m.source === "campaign" || m.source === "followup") && (
+          <span className={cn("mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide", out ? "text-white/70" : "text-muted")}>
+            {m.source === "campaign" ? "Campaña" : "Seguimiento automático"}
           </span>
         )}
         {m.type === "template" && (

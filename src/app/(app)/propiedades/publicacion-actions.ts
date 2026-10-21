@@ -46,6 +46,9 @@ export async function savePublicationSettings(formData: FormData) {
 }
 
 export async function publishProperty(formData: FormData) {
+  // Publicar es exponer en internet (indexable): solo un administrador. Un agente puede preparar la ficha.
+  const admin = await requireRole("admin");
+  if (!admin) back(text(formData, "propertyId", 64), "pub=solo_admin");
   const { orgId, propertyId, property } = await loadOwned(formData);
   const branding = await getOrgBranding(orgId);
   // Se revalida en el servidor: el botón deshabilitado de la pantalla no es una garantía.

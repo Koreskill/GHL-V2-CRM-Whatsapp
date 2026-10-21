@@ -11,6 +11,9 @@ import type {
   WebhookReferral,
   ZernioWebhookPayload,
 } from "@/lib/zernio/types";
+import { automationAllowed, ingestAllowed, orgStatus } from "@/lib/agency/lifecycle";
+import { isOptOutRequest } from "@/lib/crm/opt-out";
+import { enqueue } from "@/lib/jobs/queue";
 import { resolveContact } from "./contacts";
 
 export type IngestResult =
@@ -95,6 +98,9 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
   const msg: WebhookMessage = payload.message;
   const channel = account.channel;
   const organizationId = account.organizationId;
+  // Suspendida: se guarda igual (no se pierde). Eliminada: sus datos ya se anonimizaron, no se vuelve a llenar.
+  const status = await orgStatus(organizationId);
+  if (!ingestAllowed(status)) return { kind: "ignored", reason: "org_eliminada" };
   if (!isCrmChannel(msg.platform) || msg.platform !== channel) {
     return { kind: "ignored", reason: `platform_mismatch:${msg.platform}` };
   }
@@ -161,14 +167,51 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
         updatedAt: sql`now()`,
       })
       .where(eq(conversations.id, conversationId));
+
+    if (inbound) {
+      // Contestó: los seguimientos de este hilo se cortan (el próximo ciclo arranca de cero si vuelve a callar).
+      await db.execute(sql`
+        update followup_enrollments set status = 'respondio', responded_at = ${at}, next_run_at = null, lease_until = null, updated_at = now()
+        where conversation_id = ${conversationId} and organization_id = ${organizationId} and status = 'activa'
+      `);
+      // Pidió la baja de mensajes comerciales: queda marcado en el contacto (campañas y seguimientos lo excluyen).
+      if (contactId && isOptOutRequest(msg.text)) {
+        await db.execute(sql`
+          update contacts set marketing_opt_out_at = coalesce(marketing_opt_out_at, ${at}), marketing_opt_out_source = coalesce(marketing_opt_out_source, 'mensaje'), updated_at = now()
+          where id = ${contactId} and organization_id = ${organizationId}
+        `);
+      }
+      // El triaje se ENCOLA en la misma transacción: si el evento quedó guardado, el trabajo también. Un
+      // reinicio del proceso no pierde la respuesta (antes vivía en un after() en memoria). La espera de
+      // 5 s agrupa ráfagas: solo el último mensaje de la ráfaga contesta (ver superseded() en run.ts).
+      if (automationAllowed(status)) {
+        await enqueue(
+          {
+            organizationId,
+            kind: "triage",
+            dedupeKey: `triage:${inserted.id}`,
+            payload: { conversationId, messageId: inserted.id },
+            runAfter: new Date(Date.now() + TRIAGE_BATCH_MS),
+            maxAttempts: 3,
+          },
+          db,
+        );
+      }
+    }
   }
 
   return { kind: "message", conversationId, messageId: inserted?.id ?? null, inbound, inserted: Boolean(inserted), sentAt };
 }
 
+export const TRIAGE_BATCH_MS = 5_000;
+
 async function ingestStatus(db: Db, payload: WebhookMessageStatus): Promise<IngestResult> {
   const next = payload.event === "message.delivered" ? "delivered" : payload.event === "message.read" ? "read" : "failed";
   const error = payload.error ? [payload.error.code, payload.error.title, payload.error.message].filter(Boolean).join(" · ") : null;
+
+  // Solo dentro de la inmobiliaria dueña de la cuenta: el id externo es único por inmobiliaria, no global.
+  const account = await findChannelAccount(db, payload.account);
+  if (!account) return { kind: "ignored", reason: "unknown_account" };
 
   // No retroceder: un "delivered" que llega después de "read" no pisa el estado.
   const updated = await db
@@ -176,6 +219,7 @@ async function ingestStatus(db: Db, payload: WebhookMessageStatus): Promise<Inge
     .set({ status: next, ...(next === "failed" ? { error } : {}) })
     .where(
       and(
+        eq(messages.organizationId, account.organizationId),
         eq(messages.externalId, payload.message.platformMessageId),
         sql`(case ${messages.status}
                when 'pending' then 0 when 'received' then 0 when 'sent' then 1
@@ -187,11 +231,19 @@ async function ingestStatus(db: Db, payload: WebhookMessageStatus): Promise<Inge
 }
 
 async function ingestReferral(db: Db, payload: WebhookReferral): Promise<IngestResult> {
+  const account = await findChannelAccount(db, payload.account);
+  if (!account) return { kind: "ignored", reason: "unknown_account" };
   const attribution = { ...payload.referral, capturedAt: payload.timestamp };
   await db
     .update(conversations)
     .set({ metadata: sql`jsonb_build_object('attribution', ${JSON.stringify(attribution)}::jsonb) || ${conversations.metadata}` })
-    .where(and(eq(conversations.provider, "zernio"), eq(conversations.externalId, payload.conversation.platformConversationId)));
+    .where(
+      and(
+        eq(conversations.organizationId, account.organizationId),
+        eq(conversations.provider, "zernio"),
+        eq(conversations.externalId, payload.conversation.platformConversationId),
+      ),
+    );
   return { kind: "referral" };
 }
 

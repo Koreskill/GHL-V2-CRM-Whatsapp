@@ -1,6 +1,7 @@
 import { and, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "@/db";
 import { contacts, conversations, messages, type Channel } from "@/db/schema";
+import { originLabel, readAttribution, type AdOrigin, type OriginKind } from "./attribution";
 import { computeWindow, type MessagingWindow } from "./window";
 
 export type ConversationListItem = {
@@ -15,7 +16,21 @@ export type ConversationListItem = {
   preview: string | null;
   previewDirection: "inbound" | "outbound" | null;
   status: string;
+  /** Anuncio o enlace de origen, resumido para la lista. */
+  origin: { kind: OriginKind; label: string } | null;
 };
+
+// En la lista solo viaja el JSON de `attribution` (como texto: el driver no parsea jsonb en una expresión suelta).
+function originFromJson(json: string | null): AdOrigin | null {
+  if (!json) return null;
+  try {
+    return readAttribution({ attribution: JSON.parse(json) });
+  } catch {
+    return null;
+  }
+}
+
+const summarizeOrigin = (o: AdOrigin | null) => (o ? { kind: o.kind, label: originLabel(o) } : null);
 
 export async function listConversations(orgId: string, filters: { channel?: Channel; q?: string; limit?: number; tab?: "desactivas" | "activas" | "delegadas" | "archivadas" }) {
   const db = getDb();
@@ -61,6 +76,7 @@ export async function listConversations(orgId: string, filters: { channel?: Chan
       status: conversations.status,
       preview: sql<string | null>`last.body`,
       previewDirection: sql<"inbound" | "outbound" | null>`last.direction`,
+      attribution: sql<string | null>`${conversations.metadata}->>'attribution'`,
     })
     .from(conversations)
     .leftJoin(contacts, eq(contacts.id, conversations.contactId))
@@ -81,6 +97,7 @@ export async function listConversations(orgId: string, filters: { channel?: Chan
     status: r.status,
     preview: r.preview,
     previewDirection: r.previewDirection,
+    origin: summarizeOrigin(originFromJson(r.attribution)),
   }));
 }
 
@@ -98,6 +115,8 @@ export type ConversationDetail = ConversationListItem & {
   delegatedFrom: string | null;
   aiEnabled: boolean;
   window: MessagingWindow;
+  /** Detalle del anuncio o enlace de origen (la lista solo trae el resumen en `origin`). */
+  adOrigin: AdOrigin | null;
 };
 
 export async function getConversation(id: string, orgId: string): Promise<ConversationDetail | null> {
@@ -109,6 +128,7 @@ export async function getConversation(id: string, orgId: string): Promise<Conver
     .where(and(eq(conversations.id, id), eq(conversations.organizationId, orgId)));
   if (!r) return null;
   const c = r.conv;
+  const adOrigin = readAttribution(c.metadata);
   return {
     id: c.id,
     channel: c.channel,
@@ -125,6 +145,8 @@ export async function getConversation(id: string, orgId: string): Promise<Conver
     delegatedFrom: ((c.metadata as Record<string, { fromOrganization?: string } | undefined>)?.delegation?.fromOrganization as string | undefined) ?? null,
     aiEnabled: c.aiEnabled,
     window: computeWindow(c.channel, c.lastInboundAt),
+    origin: summarizeOrigin(adOrigin),
+    adOrigin,
   };
 }
 
@@ -136,7 +158,7 @@ export type ChatMessage = {
   status: string;
   error: string | null;
   sentAt: string;
-  source: "human" | "agent" | null;
+  source: "human" | "agent" | "campaign" | "followup" | null;
 };
 
 export async function listMessages(conversationId: string, orgId: string, limit = 200): Promise<ChatMessage[]> {
@@ -160,7 +182,7 @@ export async function listMessages(conversationId: string, orgId: string, limit 
   return rows.reverse().map((m) => ({
     ...m,
     sentAt: m.sentAt.toISOString(),
-    source: m.source === "agent" || m.source === "human" ? m.source : null,
+    source: m.source === "agent" || m.source === "human" || m.source === "campaign" || m.source === "followup" ? m.source : null,
   }));
 }
 

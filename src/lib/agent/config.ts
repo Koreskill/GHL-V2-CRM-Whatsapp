@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { agentConfigs, type Channel } from "@/db/schema";
+import { activeFirstReplies, type FirstRepliesConfig } from "./first-replies";
 import { TOOL_NAMES, type ToolName } from "./tools";
 
 export const DEFAULT_SYSTEM_PROMPT = `Sos el asistente comercial del negocio y respondés mensajes de clientes potenciales.
@@ -20,13 +21,15 @@ export type ResolvedAgentConfig = {
   /** Modelo que CLASIFICA (Jev). Null = se resuelve por ai_model_configs o por el env. */
   decisionModel: string | null;
   tools: ToolName[];
+  /** Guion de las primeras respuestas. Null = apagado o sin pasos (ver first-replies.ts). */
+  firstReplies: FirstRepliesConfig | null;
 };
 
 type Row = typeof agentConfigs.$inferSelect;
 
 // Cascada: config del canal -> config global -> default del código. `enabled` es solo del canal.
 export function mergeAgentConfig(channelRow: Row | undefined, globalRow: Row | undefined): ResolvedAgentConfig {
-  const pick = <K extends "systemPrompt" | "model" | "decisionModel" | "enabledTools">(key: K) => {
+  const pick = <K extends "systemPrompt" | "model" | "decisionModel" | "enabledTools" | "firstReplies">(key: K) => {
     const v = channelRow?.[key];
     const hasValue = Array.isArray(v) ? true : typeof v === "string" ? v.trim() !== "" : v != null;
     return hasValue ? v : globalRow?.[key];
@@ -38,6 +41,8 @@ export function mergeAgentConfig(channelRow: Row | undefined, globalRow: Row | u
     model: (pick("model") as string | null | undefined)?.trim() || DEFAULT_MODEL(),
     decisionModel: (pick("decisionModel") as string | null | undefined)?.trim() || null,
     tools: tools.filter((t): t is ToolName => (TOOL_NAMES as readonly string[]).includes(t)),
+    // Si el canal tiene su propio guion (aunque esté apagado) manda sobre el general: apagarlo acá lo apaga.
+    firstReplies: activeFirstReplies(pick("firstReplies")),
   };
 }
 

@@ -169,6 +169,20 @@
       "when": 1791901011535,
       "tag": "0023_estado_senada",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792504893771,
+      "tag": "0024_operacion_campanas_seguimientos",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792617215180,
+      "tag": "0025_primeras_respuestas",
+      "breakpoints": true
     }
   ]
 }
