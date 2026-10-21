@@ -32,8 +32,10 @@ export async function proxy(request: NextRequest) {
   const isMachine = MACHINE_PREFIXES.some((p) => pathname.startsWith(p));
 
   // Límite por IP para la API usada por personas (los webhooks de Zernio llegan en ráfagas legítimas).
+  // Una oficina entera sale por la misma IP: el tope es holgado (600/min) y los límites finos van por
+  // usuario en authorize(). Antes eran 240: con 6-7 personas en la bandeja ya rebotaba con 429.
   if (isApi && !isMachine) {
-    const limit = rateLimit(`api:${clientIp(request.headers)}`, 240, 60_000);
+    const limit = rateLimit(`api:${clientIp(request.headers)}`, 600, 60_000);
     if (!limit.ok) return json(429, "Demasiadas solicitudes. Espera un momento.", { "Retry-After": String(limit.retryAfterSec) });
   }
 

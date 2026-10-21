@@ -19,6 +19,7 @@ import { getDb } from "@/db";
 import { agentConfigs, channelAccounts } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
 import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "@/lib/agent/config";
+import { DEFAULT_FIRST_STEPS, MAX_FIRST_STEPS, MAX_STEP_CHARS, parseFirstReplies } from "@/lib/agent/first-replies";
 import { cn } from "@/lib/utils";
 import { saveAgentConfig, savePipelineColors } from "./actions";
 
@@ -158,10 +159,18 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
     ? { systemPrompt: DEFAULT_SYSTEM_PROMPT, model: DEFAULT_MODEL() }
     : mergeAgentConfig(undefined, globalRow);
 
+  // Primeras respuestas: lo guardado en este canal; si no hay nada, la secuencia sugerida (apagada) para editarla.
+  const firstReplies = parseFirstReplies(row?.firstReplies);
+  const frState = firstReplies ? (firstReplies.enabled ? "on" : "off") : isGlobal ? "off" : "";
+  const frSource = firstReplies?.steps.length ? firstReplies.steps : DEFAULT_FIRST_STEPS;
+  const frSteps = Array.from({ length: MAX_FIRST_STEPS }, (_, i) => frSource[i] ?? "");
+  const error = typeof params.error === "string" ? params.error : null;
+
   return (
     <>
       <PageHeader title="Configuración" subtitle="Cuentas conectadas por Zernio y agente de IA por canal" />
       {tabs}
+      {error && <p className="mb-4 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</p>}
 
       <form action={saveAgentConfig}>
         <input type="hidden" name="scope" value={tab} />
@@ -316,12 +325,91 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
             </p>
           </div>
 
+          {/* Guion de las primeras respuestas: qué dice el bot en sus primeros mensajes de una conversación nueva. */}
+          <div className="p-6">
+            <p className="text-[15px] font-semibold text-ink">Primeras respuestas</p>
+            <p className="mb-4 text-[13px] text-muted">
+              Una secuencia corta para las primeras respuestas del bot en una conversación nueva, pensada para quien llega desde un
+              anuncio. Cada paso es una guía: el bot la dice con sus palabras, responde primero lo que la persona preguntó y no vuelve
+              a preguntar lo que ya sabe. Los datos de propiedades siguen saliendo siempre del catálogo.
+            </p>
+
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <label htmlFor="frState" className="block text-[13.5px] font-medium text-ink">
+                  Estado
+                </label>
+                <select
+                  id="frState"
+                  name="frState"
+                  defaultValue={frState}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink focus:border-primary focus:outline-none"
+                >
+                  {!isGlobal && <option value="">Heredar de General</option>}
+                  <option value="off">Apagadas</option>
+                  <option value="on">Activas</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="frApplies" className="block text-[13.5px] font-medium text-ink">
+                  Cuándo se usan
+                </label>
+                <select
+                  id="frApplies"
+                  name="frApplies"
+                  defaultValue={firstReplies?.appliesTo ?? "anuncios"}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink focus:border-primary focus:outline-none"
+                >
+                  <option value="anuncios">Solo si la conversación viene de un anuncio</option>
+                  <option value="todas">En toda conversación nueva</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-4">
+              {frSteps.map((text, i) => (
+                <div key={i}>
+                  <label htmlFor={`frStep${i + 1}`} className="block text-[13.5px] font-medium text-ink">
+                    Respuesta {i + 1}
+                    {i > 0 && <span className="ml-1.5 text-[12px] font-normal text-muted">(opcional)</span>}
+                  </label>
+                  <textarea
+                    id={`frStep${i + 1}`}
+                    name={`frStep${i + 1}`}
+                    defaultValue={text}
+                    rows={2}
+                    maxLength={MAX_STEP_CHARS}
+                    className="mt-1.5 w-full rounded-xl border border-line bg-field px-3.5 py-2.5 text-[13.5px] leading-relaxed text-ink placeholder:text-muted/70 focus:border-primary focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-4 rounded-lg bg-field px-3 py-2 text-[12.5px] leading-relaxed text-muted">
+              Se aplica solo mientras nadie del equipo haya escrito en la conversación, y termina cuando el bot recorrió todos los
+              pasos. Un reclamo, una tasación o un pedido de visita se atienden por su propio flujo, no por el guion. Probalo en el{" "}
+              <Link href="/laboratorio" className="text-primary hover:underline">
+                Laboratorio
+              </Link>{" "}
+              antes de activarlo.
+            </p>
+          </div>
+
           <div className="flex items-center justify-end gap-3 p-4">
             {saved && (
               <span className="mr-auto flex items-center gap-1.5 text-[13px] text-accent-green">
                 <CheckCircle2 className="size-4" /> Cambios guardados
               </span>
             )}
+            <a href={`/configuracion/agente?scope=${tab}`} className="text-[12.5px] text-primary hover:underline">
+              Historial, reportes y ejemplos
+            </a>
+            <input
+              name="versionNote"
+              maxLength={200}
+              placeholder="Qué cambiaste (queda en el historial)"
+              className="h-9 w-64 rounded-lg border border-line bg-field px-3 text-[13px] text-ink focus:border-primary focus:outline-none"
+            />
             <Button type="submit">Guardar cambios</Button>
           </div>
         </Card>

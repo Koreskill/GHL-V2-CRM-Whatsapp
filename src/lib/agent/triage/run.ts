@@ -10,6 +10,7 @@ import {
   visits,
   type TriageStatus,
 } from "@/db/schema";
+import { canAutomate } from "@/lib/agency/lifecycle";
 import { reportIncident } from "@/lib/incidents/report";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
@@ -35,7 +36,8 @@ export { DEFAULT_DECISION_MODEL };
 // Si el trabajo se procesa mucho después, no se contesta como si el mensaje fuera de recién.
 const MAX_DELAY_MS = 10 * 60 * 1000;
 const MAX_PER_CONVERSATION_HOUR = 20;
-const maxPerHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR) || 300;
+const maxPerOrgHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR) || 300;
+const maxGlobalHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR_GLOBAL) || 3000;
 
 export type TriageResult =
   | { status: "skipped"; reason: string }
@@ -78,12 +80,31 @@ export async function resolvePolicy(orgId: string, channel: string): Promise<Pol
  * El índice único sobre message_id hace que dos corridas simultáneas del mismo mensaje
  * (un reintento del webhook, por ejemplo) no lo clasifiquen ni lo contesten dos veces.
  */
+// Una corrida que reclamó y murió (reinicio, caída) deja la fila "en proceso". Pasado este tiempo, el
+// reintento de la cola la retoma en vez de saltearla como "ya procesada": el cliente no queda sin respuesta.
+const ABANDONED_CLAIM_MS = 5 * 60_000;
+
 async function claim(input: { organizationId: string; conversationId: string; messageId: string }): Promise<string | null> {
-  const [row] = await getDb()
+  let [row] = await getDb()
     .insert(messageTriage)
     .values({ ...input, status: "error", error: "en proceso" })
     .onConflictDoNothing({ target: messageTriage.messageId })
     .returning({ id: messageTriage.id });
+  if (!row) {
+    [row] = await getDb()
+      .update(messageTriage)
+      .set({ updatedAt: sql`now()`, error: "en proceso (retomado)" })
+      .where(
+        and(
+          eq(messageTriage.messageId, input.messageId),
+          eq(messageTriage.organizationId, input.organizationId),
+          eq(messageTriage.status, "error"),
+          sql`${messageTriage.error} like 'en proceso%'`,
+          sql`${messageTriage.updatedAt} < now() - (${ABANDONED_CLAIM_MS / 1000} * interval '1 second')`,
+        ),
+      )
+      .returning({ id: messageTriage.id });
+  }
   if (row) {
     // Un mensaje nuevo del cliente deja obsoleto cualquier borrador anterior de ese hilo: respondía a
     // otra cosa y mandarlo sería contestar fuera de contexto.
@@ -267,6 +288,8 @@ function persistable(c: ComposeResult) {
         ? { modo: c.retrieval.mode, ofrecidas: c.retrieval.offered.length, coincidencias: c.retrieval.totalExact }
         : null,
       _bloqueos: c.violations.map((v) => v.code),
+      // Si la respondió el guion de primeras respuestas: en qué paso iba.
+      _guion: c.firstReply,
     },
     handoffReason: c.handoffReason,
   };
@@ -280,10 +303,27 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
     .from(messages)
     .where(and(eq(messages.id, opts.triggerMessageId), eq(messages.conversationId, conversationId)));
   if (!trigger || trigger.direction !== "inbound") return { status: "skipped", reason: "trigger_not_found" };
-  if (Date.now() - trigger.sentAt.getTime() > MAX_DELAY_MS) return { status: "skipped", reason: "stale" };
 
   const [conv] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!conv) return { status: "skipped", reason: "conversation_not_found" };
+  // Suspendida: el mensaje quedó guardado, pero nada automático contesta (ver agency/lifecycle.ts).
+  if (!(await canAutomate(conv.organizationId))) return { status: "skipped", reason: "org_inactive" };
+
+  // Vencido: ya no se contesta solo (sería fuera de contexto), pero NO se pierde en silencio: si el bot
+  // tenía que contestar y nadie lo hizo, queda en la campanita para una persona.
+  if (Date.now() - trigger.sentAt.getTime() > MAX_DELAY_MS) {
+    if (conv.aiEnabled && !(await superseded(conversationId, trigger)) && (await resolveAgentConfig(conv.organizationId, conv.channel)).enabled) {
+      const staleId = await claim({ organizationId: conv.organizationId, conversationId, messageId: trigger.id });
+      if (staleId) {
+        await finish(staleId, {
+          status: "derivado",
+          routeReason: "No se respondió a tiempo (demora o caída del sistema): lo tiene que contestar una persona",
+          error: null,
+        });
+      }
+    }
+    return { status: "skipped", reason: "stale" };
+  }
 
   // Doble interruptor: el hilo Y el canal.
   if (!conv.aiEnabled) return { status: "skipped", reason: "conversation_ai_off" };
@@ -296,16 +336,20 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
   if (!text) return { status: "skipped", reason: "empty_message" };
 
   // Topes de gasto antes de llamar a ningún modelo.
-  const [usage] = await db.execute<{ conv: number; total: number }>(sql`
+  // Tres topes: por conversación, por inmobiliaria y GLOBAL (todas juntas). Antes el "global" se contaba
+  // por inmobiliaria, así que con N clientes el techo real era N veces el configurado.
+  const [usage] = await db.execute<{ conv: number; org: number; total: number }>(sql`
     select
       count(*) filter (where conversation_id = ${conversationId})::int as conv,
+      count(*) filter (where organization_id = ${conv.organizationId})::int as org,
       count(*)::int as total
     from messages
     where direction = 'outbound' and raw_payload->>'source' = 'agent'
-      and organization_id = ${conv.organizationId} and sent_at >= now() - interval '1 hour'
+      and sent_at >= now() - interval '1 hour'
   `);
   if (usage.conv >= MAX_PER_CONVERSATION_HOUR) return { status: "skipped", reason: "limit_conversation" };
-  if (usage.total >= maxPerHour()) return { status: "skipped", reason: "limit_global" };
+  if (usage.org >= maxPerOrgHour()) return { status: "skipped", reason: "limit_org" };
+  if (usage.total >= maxGlobalHour()) return { status: "skipped", reason: "limit_global" };
   if (!process.env.OPENROUTER_API_KEY) return { status: "skipped", reason: "openrouter_key_missing" };
 
   // Idempotencia: si ya lo reclamó otra corrida, se corta sin gastar nada.
@@ -371,8 +415,11 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
     // ── Política de baja confianza (OPE-005 §7) ──
     // Una pregunta de aclaración nacida de la duda del clasificador, o un texto armado por código
     // porque el modelo falló o inventó datos, NUNCA salen solos: quedan de borrador para una persona.
+    // Excepción: un paso del guion de primeras respuestas. Lo escribió un administrador y el mensaje típico
+    // de un anuncio ("hola, quiero más información") sale con confianza baja; sin esto, el guion nunca
+    // contestaría justo ahí. Un texto armado por código sigue siendo borrador.
     const needsReview =
-      route === "aclaracion" || (composed.source === "determinista" && composed.disposition === "responder");
+      (route === "aclaracion" && !composed.firstReply) || (composed.source === "determinista" && composed.disposition === "responder");
     if (needsReview && policy.autoReply === "auto" && composed.text) {
       await finish(triageId, {
         ...record,

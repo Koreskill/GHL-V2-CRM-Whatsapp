@@ -1,4 +1,6 @@
 import { aiChatComplete } from "@/lib/ai/openrouter";
+import { approvedExamples } from "@/lib/agent/feedback";
+import { firstStepPrompt, originForPrompt, type FirstReplyStep } from "@/lib/agent/first-replies";
 import { safeError } from "@/lib/safe-error";
 import type { TriageContext } from "./context";
 import { offeredForPrompt, type Retrieval } from "./retrieval";
@@ -127,8 +129,13 @@ function buildPrompt(input: {
   handoff: boolean;
   orgPrompt: string;
   known: Record<string, unknown>;
+  examples?: { customer: string; reply: string }[];
+  firstStep?: FirstReplyStep | null;
 }) {
   const { ctx, retrieval, route, intent, urgency, handoff, orgPrompt, known } = input;
+  const examples = input.examples ?? [];
+  // El guion nunca aplica en una derivación: ahí solo sale el acuse.
+  const firstStep = handoff ? null : (input.firstStep ?? null);
 
   const system = [
     BASE_RULES,
@@ -136,12 +143,20 @@ function buildPrompt(input: {
     "TONO Y REGLAS PROPIAS DE ESTA INMOBILIARIA",
     orgPrompt.trim() || "(sin indicaciones adicionales)",
     "",
+    ...(examples.length && !handoff
+      ? [
+          "RESPUESTAS APROBADAS POR ESTA INMOBILIARIA (solo como guía de TONO y forma; los datos de propiedades, precios y disponibilidad salen SIEMPRE de DATOS VERIFICADOS, nunca de estos ejemplos)",
+          ...examples.map((e, i) => `Ejemplo ${i + 1}\n- Cliente: ${JSON.stringify(e.customer)}\n- Respuesta aprobada: ${JSON.stringify(e.reply)}`),
+          "",
+        ]
+      : []),
     "CLASIFICACIÓN YA RESUELTA (no la discutas ni la cambies)",
     `- Intención: ${intent}`,
     `- Ruta: ${route}`,
     `- Urgencia: ${urgency}`,
     "",
     `TU TAREA EN ESTA RUTA: ${ROUTE_GOAL[route]}`,
+    ...(firstStep ? ["", firstStepPrompt(firstStep)] : []),
     handoff
       ? "\nEsta conversación la sigue una persona del equipo. Escribí SOLO un acuse breve: que lo recibiste y que alguien lo va a ver. No muestres propiedades, no intentes resolverlo, no prometas nada."
       : "",
@@ -153,6 +168,8 @@ function buildPrompt(input: {
       {
         contacto: ctx.contactoNombre,
         lo_que_ya_sabemos: known,
+        // Solo cuando el guion está en curso: el título del anuncio sirve para saludar, no para vender.
+        ...(firstStep ? { anuncio_de_origen: originForPrompt(ctx.origen) } : {}),
         // En derivación no se muestran propiedades: se le pasa la lista vacía para que ni lo intente.
         propiedades_ofrecidas: handoff ? [] : offeredForPrompt(retrieval.offered, retrieval.mode),
         como_se_encontraron: retrieval.mode,
@@ -230,13 +247,17 @@ export async function generateReply(input: {
   handoff: boolean;
   orgPrompt: string;
   known: Record<string, unknown>;
+  /** Paso del guion de primeras respuestas que toca, si hay uno en curso. */
+  firstStep?: FirstReplyStep | null;
   model: string;
   provider?: string;
   params?: Record<string, unknown>;
   /** Segundo intento: qué estuvo mal en la respuesta anterior. */
   correction?: { previous: string; instruction: string };
 }): Promise<GenerateResult> {
-  const { system, user } = buildPrompt(input);
+  // Ejemplos aprobados por un admin de ESTA inmobiliaria (lib/agent/feedback.ts). Si falla la lectura, sin ejemplos.
+  const examples = await approvedExamples(input.ctx.organizationId).catch(() => []);
+  const { system, user } = buildPrompt({ ...input, examples });
 
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
     { role: "system", content: system },

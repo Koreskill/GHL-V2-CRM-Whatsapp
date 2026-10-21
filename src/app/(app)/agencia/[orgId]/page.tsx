@@ -18,6 +18,8 @@ import { countVisits } from "@/lib/visits/queries";
 import { ClientNews } from "@/components/news/news-summary";
 import { ClientSheetPanel } from "@/components/agency/client-sheet-panel";
 import { enterClient } from "../actions";
+import { LifecyclePanel } from "@/components/agency/lifecycle-panel";
+import { clientHealth } from "@/lib/agency/health";
 import { cn } from "@/lib/utils";
 
 const CHANNELS: Channel[] = ["whatsapp", "instagram", "facebook"];
@@ -67,6 +69,8 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
       countOpenIncidents(orgId),
     ]);
   const users = hasAdminKey() ? await listUsersByOrg(orgId).catch(() => []) : [];
+  const health = await clientHealth(orgId);
+  const ciclo = typeof sp.ciclo === "string" ? sp.ciclo : null;
 
   const globalCfg = agentState.find((a) => a.scope === "global");
 
@@ -102,6 +106,8 @@ export default async function ClienteAgenciaPage({ params, searchParams }: PageP
         <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-accent-green">{aviso}</p>
       )}
       {error && <p className="mb-5 rounded-lg bg-accent-red/10 px-3 py-2 text-[13px] text-accent-red">{error}</p>}
+      {ciclo && <p className="mb-5 rounded-lg bg-accent-green/10 px-3 py-2 text-[13px] text-ink">Cliente {ciclo}. Quedó registrado en la auditoría.</p>}
+      <LifecyclePanel org={{ id: org.id, name: org.name, status: org.status, statusReason: org.statusReason }} health={health} isHome={orgId === session.homeOrganizationId} />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {[

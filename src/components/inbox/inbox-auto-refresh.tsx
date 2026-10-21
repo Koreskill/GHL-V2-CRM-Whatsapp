@@ -1,24 +1,36 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
-const REFRESH_MS = 3000;
+const POLL_MS = 4000;
 
+// Pregunta por una VERSIÓN liviana (/api/inbox/version) y recarga la página solo si cambió. Con la
+// pestaña oculta no consulta; al volver, consulta en el acto.
 export function InboxAutoRefresh() {
   const router = useRouter();
+  const last = useRef<string | null>(null);
 
   useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState === "visible") router.refresh();
+    let stopped = false;
+    const check = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      const res = await fetch("/api/inbox/version", { cache: "no-store" }).catch(() => null);
+      const data = res?.ok ? ((await res.json().catch(() => null)) as { version?: string } | null) : null;
+      if (!data?.version) return;
+      if (last.current !== null && last.current !== data.version) router.refresh();
+      last.current = data.version;
     };
-    const interval = window.setInterval(refresh, REFRESH_MS);
-    document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("focus", refresh);
+    void check();
+    const interval = window.setInterval(check, POLL_MS);
+    const onVisible = () => void check();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
+      stopped = true;
       window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", refresh);
-      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
   }, [router]);
 

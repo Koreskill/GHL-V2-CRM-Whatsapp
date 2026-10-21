@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MessageCircle, Search } from "lucide-react";
+import { Link2, Megaphone, MessageCircle, Search } from "lucide-react";
 import { CHANNEL_META, type Channel } from "@/components/channel-icons";
 import { EmptyState } from "@/components/ui/primitives";
 import { formatListDate } from "@/lib/format";
@@ -124,6 +124,15 @@ export function ConversationList({
                       <span className={cn("truncate text-[13.5px] text-ink", c.unreadCount > 0 ? "font-semibold" : "font-medium")}>
                         {c.name}
                       </span>
+                      {c.origin && (
+                        <span
+                          title={c.origin.kind === "anuncio" ? `Vino de un anuncio: ${c.origin.label}` : c.origin.label}
+                          className="inline-flex max-w-[110px] shrink-0 items-center gap-1 rounded-md bg-field px-1.5 py-0.5 text-[10.5px] font-medium text-muted"
+                        >
+                          {c.origin.kind === "anuncio" ? <Megaphone className="size-3" strokeWidth={1.8} /> : <Link2 className="size-3" strokeWidth={1.8} />}
+                          <span className="truncate">{c.origin.kind === "anuncio" ? "Anuncio" : "Enlace"}</span>
+                        </span>
+                      )}
                       <span className="ml-auto shrink-0 text-[11.5px] text-muted">{formatListDate(c.lastMessageAt)}</span>
                     </span>
                     <span className="mt-0.5 flex items-center gap-2">

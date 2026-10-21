@@ -124,7 +124,10 @@ export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
+  // activa | suspendida | eliminada. Ver lib/agency/lifecycle.ts: es la ÚNICA definición de qué corta cada estado.
   status: text("status").notNull().default("activa"),
+  statusChangedAt: timestamp("status_changed_at", { withTimezone: true }),
+  statusReason: text("status_reason"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   ...timestamps,
 });
@@ -243,6 +246,12 @@ export const contacts = pgTable("contacts", {
   name: text("name"),
   phone: text("phone"),
   email: text("email"),
+  // Pidió no recibir más mensajes comerciales (escribió BAJA o lo marcó una persona). Lo excluye de
+  // campañas y seguimientos; NO bloquea que el bot le conteste si escribe él.
+  marketingOptOutAt: timestamp("marketing_opt_out_at", { withTimezone: true }),
+  marketingOptOutSource: text("marketing_opt_out_source"), // mensaje | manual
+  // Anonimizado al eliminar la inmobiliaria: sin datos personales, solo para métricas agregadas.
+  anonymizedAt: timestamp("anonymized_at", { withTimezone: true }),
   ...timestamps,
 });
 
@@ -397,6 +406,8 @@ export const agentConfigs = pgTable(
     humanThreshold: numeric("human_threshold"),
     // Modelo de clasificación (Jev). Separado de `model`, que es el que redacta.
     decisionModel: text("decision_model"),
+    // Guion de las primeras respuestas (ver lib/agent/first-replies.ts). Null = hereda de 'global'.
+    firstReplies: jsonb("first_replies").$type<{ enabled: boolean; appliesTo: "anuncios" | "todas"; steps: string[] }>(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow()
@@ -1068,8 +1079,16 @@ export const campaignBatches = pgTable(
     // Variables de la plantilla; admite {nombre}, que se reemplaza por el primer nombre de cada contacto.
     params: jsonb("params").$type<string[]>().notNull().default([]),
     filters: jsonb("filters").$type<Record<string, string>>().notNull().default({}),
-    // estimada | confirmada | enviando | completada | cancelada
+    // Cuenta emisora: el destinatario tiene que tener una conversación EN esta cuenta.
+    channelAccountId: uuid("channel_account_id").references(() => channelAccounts.id, { onDelete: "set null" }),
+    // Grupos, etiquetas y segmentos elegidos (se suman entre sí; los filtros de arriba los recortan).
+    audience: jsonb("audience").$type<{ groupIds?: string[]; labelIds?: string[]; segmentIds?: string[] }>().notNull().default({}),
+    // estimada | confirmada | programada | enviando | pausada | completada | cancelada
     status: text("status").notNull().default("estimada"),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
     audienceCount: integer("audience_count").notNull().default(0),
     excluded: jsonb("excluded").$type<Record<string, number>>().notNull().default({}),
     // Costo: todo queda guardado para poder explicar el total (no es un precio universal).
@@ -1105,11 +1124,14 @@ export const campaignRecipients = pgTable(
     conversationId: uuid("conversation_id")
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
-    // pendiente | enviando | enviado | fallido
+    // pendiente | enviando | enviado | fallido | omitido
     status: text("status").notNull().default("pendiente"),
     messageId: uuid("message_id").references(() => messages.id, { onDelete: "set null" }),
     error: text("error"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    // Reintentos controlados: un fallo transitorio vuelve a 'pendiente' con espera; al tope queda 'fallido'.
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
@@ -1618,3 +1640,237 @@ export const calendarOauthStates = pgTable("calendar_oauth_states", {
   usedAt: timestamp("used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ─── Operación: cola persistente, contactos organizados, seguimientos y mejora del agente (0024) ──
+
+// Cola de trabajos en Postgres. Sobrevive a reinicios: un trabajo se RECLAMA con un lease (FOR UPDATE
+// SKIP LOCKED) y, si el proceso muere, el lease vence y otro lo retoma. `dedupe_key` única: encolar
+// dos veces lo mismo (un reintento del webhook) no crea dos trabajos.
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Null = trabajo del plano de agencia (sin inmobiliaria).
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // triage | campaign | followups | account_import
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    dedupeKey: text("dedupe_key").notNull(),
+    // queued | running | done | failed (reintentable) | dead (agotó intentos) | skipped
+    status: text("status").notNull().default("queued"),
+    runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    lastError: text("last_error"),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("jobs_dedupe_key").on(t.dedupeKey),
+    index("jobs_due_idx").on(t.status, t.runAfter),
+    index("jobs_org_kind_idx").on(t.organizationId, t.kind, t.status),
+  ],
+);
+
+// Etiqueta: un atributo libre que se le pone a un contacto ("inversor", "referido"). Borrar la
+// etiqueta borra solo las asignaciones, nunca los contactos.
+export const contactLabels = pgTable(
+  "contact_labels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    color: text("color").notNull().default("slate"), // id de la paleta, nunca CSS libre
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("contact_labels_org_name_key").on(t.organizationId, t.name)],
+);
+
+export const contactLabelLinks = pgTable(
+  "contact_label_links",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    labelId: uuid("label_id")
+      .notNull()
+      .references(() => contactLabels.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.labelId, t.contactId] }), index("contact_label_links_contact_idx").on(t.contactId)],
+);
+
+// Grupo: un conjunto armado a mano (selección fija). El segmento, en cambio, es una vista guardada
+// (contact_views): un criterio que se reevalúa cada vez.
+export const contactGroups = pgTable(
+  "contact_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    createdBy: uuid("created_by"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("contact_groups_org_name_key").on(t.organizationId, t.name)],
+);
+
+export const contactGroupMembers = pgTable(
+  "contact_group_members",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => contactGroups.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    addedBy: uuid("added_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.groupId, t.contactId] }), index("contact_group_members_contact_idx").on(t.contactId)],
+);
+
+// Secuencia de seguimientos: pasos de texto fijo (los escribe el admin) que salen solo dentro de la
+// ventana de atención del canal. La ventana se vuelve a calcular al momento de enviar.
+export const followupSequences = pgTable(
+  "followup_sequences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    // Null = todas las cuentas de la inmobiliaria.
+    channelAccountId: uuid("channel_account_id").references(() => channelAccounts.id, { onDelete: "set null" }),
+    // sin_respuesta: la última palabra fue nuestra y el cliente no contestó.
+    trigger: text("trigger").notNull().default("sin_respuesta"),
+    // Vacío = cualquier contacto. Si tiene grupos/etiquetas/segmentos, solo esos.
+    audience: jsonb("audience").$type<{ groupIds?: string[]; labelIds?: string[]; segmentIds?: string[] }>().notNull().default({}),
+    timezone: text("timezone").notNull().default("America/Argentina/Buenos_Aires"),
+    allowedStartHour: integer("allowed_start_hour").notNull().default(8), // primera hora permitida
+    allowedEndHour: integer("allowed_end_hour").notNull().default(22), // hasta (exclusiva)
+    maxPerDay: integer("max_per_day").notNull().default(5),
+    minGapMinutes: integer("min_gap_minutes").notNull().default(60),
+    // Minutos antes del vencimiento de la ventana en los que ya no se manda nada (margen de seguridad).
+    windowMarginMinutes: integer("window_margin_minutes").notNull().default(15),
+    stopOnHandoff: boolean("stop_on_handoff").notNull().default(true),
+    stopOnDealClosed: boolean("stop_on_deal_closed").notNull().default(true),
+    createdBy: uuid("created_by"),
+    ...timestamps,
+  },
+  (t) => [index("followup_sequences_org_idx").on(t.organizationId, t.enabled)],
+);
+
+export const followupSteps = pgTable(
+  "followup_steps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    sequenceId: uuid("sequence_id")
+      .notNull()
+      .references(() => followupSequences.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    // Espera desde el último evento relevante (nuestro último mensaje o el paso anterior).
+    delayMinutes: integer("delay_minutes").notNull(),
+    body: text("body").notNull(), // admite {nombre}
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("followup_steps_sequence_position_key").on(t.sequenceId, t.position)],
+);
+
+// Una conversación dentro de una secuencia. Solo una inscripción ACTIVA por (secuencia, conversación).
+export const followupEnrollments = pgTable(
+  "followup_enrollments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    sequenceId: uuid("sequence_id")
+      .notNull()
+      .references(() => followupSequences.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    // activa | completada | respondio | detenida
+    status: text("status").notNull().default("activa"),
+    // Próximo paso a enviar (1-based). Avanza SOLO con una actualización condicional.
+    nextPosition: integer("next_position").notNull().default(1),
+    anchorAt: timestamp("anchor_at", { withTimezone: true }).notNull(),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+    sentCount: integer("sent_count").notNull().default(0),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    stopReason: text("stop_reason"),
+    lastMessageId: uuid("last_message_id").references(() => messages.id, { onDelete: "set null" }),
+    respondedAt: timestamp("responded_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("followup_enrollments_active_key")
+      .on(t.sequenceId, t.conversationId)
+      .where(sql`${t.status} = 'activa'`),
+    index("followup_enrollments_due_idx").on(t.status, t.nextRunAt),
+    index("followup_enrollments_conversation_idx").on(t.conversationId, t.status),
+  ],
+);
+
+// Historial de la configuración del agente: cada guardado deja una versión. Restaurar = copiar una
+// versión vieja a agent_configs (y eso deja otra versión nueva). Nunca se edita una versión.
+export const agentConfigVersions = pgTable(
+  "agent_config_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    version: integer("version").notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+    note: text("note"),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("agent_config_versions_key").on(t.organizationId, t.scope, t.version)],
+);
+
+// Revisión humana de una respuesta del agente. 'problema' = algo salió mal (queda registrado);
+// 'ejemplo' = una corrección que un ADMIN aprueba y desde ahí se usa como ejemplo en el prompt de
+// ESA inmobiliaria. Lo que escribe un cliente nunca entra acá solo: lo carga y aprueba una persona.
+export const agentFeedback = pgTable(
+  "agent_feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    messageId: uuid("message_id").references(() => messages.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(), // problema | ejemplo
+    customerText: text("customer_text"),
+    botText: text("bot_text"),
+    correctedText: text("corrected_text"),
+    note: text("note"),
+    // pendiente | aprobado | descartado
+    status: text("status").notNull().default("pendiente"),
+    createdBy: uuid("created_by"),
+    reviewedBy: uuid("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [index("agent_feedback_org_idx").on(t.organizationId, t.kind, t.status)],
+);
