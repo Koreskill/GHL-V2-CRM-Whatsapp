@@ -50,6 +50,6 @@ export async function POST(req: Request) {
     }
     return Response.json({ message: result.message });
   }
-  const status = { not_found: 404, empty: 400, window_closed: 409, send_failed: 502, invalid_template: 422 }[result.code];
+  const status = { not_found: 404, empty: 400, window_closed: 409, send_failed: 502, invalid_template: 422, org_inactive: 423 }[result.code];
   return Response.json({ error: result.error, code: result.code, message: result.message ?? null }, { status });
 }

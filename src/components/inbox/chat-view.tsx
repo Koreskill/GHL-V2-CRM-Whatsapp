@@ -9,6 +9,7 @@ import { dayOf, formatDayDivider, formatRemaining, formatTime } from "@/lib/form
 import type { ChatMessage, ConversationDetail } from "@/lib/inbox/queries";
 import type { ContactTagSummary } from "@/lib/crm/tag-labels";
 import { cn } from "@/lib/utils";
+import { AdOriginBanner } from "./ad-origin";
 import { Avatar } from "./avatar";
 import { ConversationActions } from "./conversation-actions";
 import { RecommendationsPanel } from "./recommendations-panel";
@@ -107,6 +108,8 @@ export function ChatView({
       error: null,
       sentAt: new Date().toISOString(),
       source: "human",
+      attachments: [],
+      transcript: null,
       local: true,
     };
     setLocal((prev) => [...prev, optimistic]);
@@ -206,6 +209,8 @@ export function ChatView({
         <ConversationActions conversationId={conversation.id} status={conversation.status} delegation={delegation} canDelegate={canDelegate} />
       </header>
 
+      {conversation.adOrigin && <AdOriginBanner origin={conversation.adOrigin} />}
+
       {conversation.delegatedFrom && (
         <p role="status" className="border-b border-line bg-accent-amber/10 px-6 py-2 text-[12.5px] text-ink">
           Expediente delegado por {conversation.delegatedFrom}. Es de solo lectura: no se puede responder por el canal original desde acá.
@@ -286,9 +291,36 @@ export function ChatView({
   );
 }
 
+// Marca una respuesta del agente para que un admin la revise (Configuración → Mejora del agente).
+function ReportButton({ messageId }: { messageId: string }) {
+  const [state, setState] = useState<"idle" | "sending" | "done" | "error">("idle");
+  if (!/^[0-9a-f-]{36}$/i.test(messageId)) return null;
+  return (
+    <button
+      type="button"
+      disabled={state === "sending" || state === "done"}
+      title={state === "done" ? "Reportada: la revisa un administrador" : "Reportar esta respuesta como problemática"}
+      onClick={async () => {
+        const note = window.prompt("¿Qué estuvo mal en esta respuesta? (opcional)") ?? "";
+        setState("sending");
+        const res = await fetch("/api/agent-feedback", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ messageId, note }),
+        }).catch(() => null);
+        setState(res?.ok ? "done" : "error");
+      }}
+      className="ml-auto rounded px-1 normal-case tracking-normal underline-offset-2 hover:underline disabled:no-underline"
+    >
+      {state === "done" ? "Reportada" : state === "error" ? "No se pudo" : "Reportar"}
+    </button>
+  );
+}
+
 function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () => void }) {
   const out = m.direction === "outbound";
-  const text = m.body ?? (m.type !== "text" ? `[${m.type}]` : "");
+  // Con un medio visible (reproductor, miniatura), el marcador "[audio]" sobra.
+  const text = m.body ?? (m.type !== "text" && m.attachments.length === 0 ? `[${m.type}]` : "");
   return (
     <div className={cn("flex", out ? "justify-end" : "justify-start")}>
       <div
@@ -301,6 +333,12 @@ function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () =
         {m.source === "agent" && (
           <span className={cn("mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide", out ? "text-white/70" : "text-muted")}>
             <Bot className="size-3" /> Agente IA
+            <ReportButton messageId={m.id} />
+          </span>
+        )}
+        {(m.source === "campaign" || m.source === "followup") && (
+          <span className={cn("mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide", out ? "text-white/70" : "text-muted")}>
+            {m.source === "campaign" ? "Campaña" : "Seguimiento automático"}
           </span>
         )}
         {m.type === "template" && (
@@ -308,7 +346,8 @@ function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () =
             <FileText className="size-3" /> Plantilla
           </span>
         )}
-        <p className="break-words whitespace-pre-wrap">{text}</p>
+        {m.attachments.length > 0 && <MediaBlock messageId={m.id} attachments={m.attachments} transcript={m.transcript} out={out} />}
+        {text && <p className="break-words whitespace-pre-wrap">{text}</p>}
         <span className={cn("mt-0.5 flex items-center justify-end gap-1 text-[10.5px]", out && m.status !== "failed" ? "text-white/70" : "text-muted")}>
           {formatTime(m.sentAt)}
           {out && <StatusIcon status={m.status} />}
@@ -330,6 +369,54 @@ function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () =
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// Audio, imagen, video o archivo de un mensaje. Se piden a la ruta del CRM, que baja el medio con la clave del
+// servidor (los de WhatsApp exigen autenticación). La lectura automática se muestra aparte y marcada como tal.
+const MEDIA_NAME: Record<string, string> = { audio: "audio", image: "imagen", video: "video", file: "archivo", sticker: "sticker", share: "contenido compartido", unknown: "adjunto" };
+
+function MediaBlock({
+  messageId,
+  attachments,
+  transcript,
+  out,
+}: {
+  messageId: string;
+  attachments: ChatMessage["attachments"];
+  transcript: ChatMessage["transcript"];
+  out: boolean;
+}) {
+  const muted = out ? "text-white/70" : "text-muted";
+  return (
+    <div className="mb-1 flex flex-col gap-1.5">
+      {attachments.map((a) => {
+        const src = `/api/messages/${messageId}/media?i=${a.index}`;
+        const name = MEDIA_NAME[a.kind] ?? "adjunto";
+        if (!a.available || messageId.startsWith("tmp-")) return <span key={a.index} className={cn("text-[12.5px]", muted)}>[{name} no disponible]</span>;
+        if (a.kind === "audio") return <audio key={a.index} controls preload="none" src={src} className="h-9 w-64 max-w-full" />;
+        if (a.kind === "image" || a.kind === "sticker") {
+          return (
+            <a key={a.index} href={src} target="_blank" rel="noopener noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element -- medio servido por el propio CRM, sin optimizar */}
+              <img src={src} alt="Imagen del mensaje" loading="lazy" className="max-h-64 max-w-full rounded-lg object-cover" />
+            </a>
+          );
+        }
+        if (a.kind === "video") return <video key={a.index} controls preload="metadata" src={src} className="max-h-64 max-w-full rounded-lg" />;
+        return (
+          <a key={a.index} href={src} target="_blank" rel="noopener noreferrer" className="inline-flex w-fit items-center gap-1 text-[12.5px] underline underline-offset-2">
+            <FileText className="size-3.5" /> Abrir {name}
+          </a>
+        );
+      })}
+      {transcript && (
+        <p className={cn("text-[12.5px] leading-snug", muted)}>
+          <span className="font-semibold">{transcript.kind === "transcripcion" ? "Transcripción automática: " : "Descripción automática: "}</span>
+          {transcript.text}
+        </p>
+      )}
     </div>
   );
 }

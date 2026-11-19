@@ -17,6 +17,8 @@ import {
   MapPin,
   Megaphone,
   MessageCircle,
+  Repeat,
+  Send,
   Settings,
   Users,
   type LucideIcon,
@@ -85,9 +87,24 @@ export function Sidebar({
   const pathname = usePathname();
   // El plano de agencia solo existe para el dueño del CRM. El servidor lo revalida en cada página:
   // esconder el link no es la protección.
+  // Campañas y seguimientos son del administrador (el servidor lo valida en cada página y acción).
+  const base: NavGroup[] =
+    user.role === "admin"
+      ? [
+          ...groups.slice(0, 3),
+          {
+            label: "Automatización",
+            items: [
+              { href: "/contactos/campanas", label: "Campañas", icon: Send },
+              { href: "/seguimientos", label: "Seguimientos", icon: Repeat },
+            ],
+          },
+          ...groups.slice(3),
+        ]
+      : groups;
   const navGroups = user.isAgencyAdmin
     ? [
-        ...groups,
+        ...base,
         {
           label: "Agencia",
           items: [
@@ -96,9 +113,11 @@ export function Sidebar({
           ],
         },
       ]
-    : groups;
-  const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+    : base;
+  // Activo = el link MÁS específico que coincide ("/contactos/campanas" gana sobre "/contactos").
+  const hrefs = [...navGroups.flatMap((g) => g.items.map((i) => i.href)), "/laboratorio", "/configuracion"];
+  const best = hrefs.filter((h) => (h === "/" ? pathname === "/" : pathname === h || pathname.startsWith(h + "/"))).sort((a, b) => b.length - a.length)[0];
+  const isActive = (href: string) => href === best;
 
   return (
     <aside className="flex h-full w-[232px] shrink-0 flex-col bg-shell px-3 py-5">

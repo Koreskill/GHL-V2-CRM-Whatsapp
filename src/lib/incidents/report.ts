@@ -11,6 +11,9 @@ export const INCIDENT_MODULES = [
   "webhook",
   "pipeline",
   "visitas",
+  "cola",
+  "campanas",
+  "seguimientos",
 ] as const;
 export type IncidentModule = (typeof INCIDENT_MODULES)[number];
 
@@ -21,6 +24,9 @@ export const MODULE_LABEL: Record<IncidentModule, string> = {
   webhook: "Webhooks",
   pipeline: "Pipeline",
   visitas: "Visitas",
+  cola: "Cola de trabajos",
+  campanas: "Campañas",
+  seguimientos: "Seguimientos",
 };
 
 /**
@@ -46,6 +52,13 @@ export async function reportIncident(input: {
     .digest("hex");
 
   const detail = input.detail === undefined ? null : safeError(input.detail).slice(0, 2000);
+
+  // Para avisar solo lo NUEVO o lo que volvió a pasar después de resuelto (no cada repetición).
+  const [before] = await getDb()
+    .select({ status: incidents.status })
+    .from(incidents)
+    .where(eq(incidents.fingerprint, fingerprint))
+    .catch(() => []);
 
   await getDb()
     .insert(incidents)
@@ -74,6 +87,36 @@ export async function reportIncident(input: {
     })
     // Un fallo registrando el incidente nunca puede tumbar la operación que lo originó.
     .catch(() => {});
+
+  if (!before || before.status === "resuelto") {
+    await notifyIncident({ organizationId: input.organizationId, module: input.module, message: input.message, reopened: Boolean(before) });
+  }
+}
+
+/**
+ * Aviso afuera del CRM: INCIDENT_ALERT_WEBHOOK_URL recibe un POST JSON con `text` (Slack, Telegram
+ * sendMessage con chat_id en la URL) y `content` (Discord). Sin datos personales: módulo, organización
+ * y el mensaje del incidente, que ya es un texto operativo. Nunca tira.
+ */
+async function notifyIncident(input: { organizationId: string | null; module: IncidentModule; message: string; reopened: boolean }) {
+  const url = process.env.INCIDENT_ALERT_WEBHOOK_URL;
+  if (!url || !/^https:\/\//.test(url)) return;
+  let orgName = "Agencia";
+  if (input.organizationId) {
+    const [org] = await getDb()
+      .select({ name: organizations.name })
+      .from(organizations)
+      .where(eq(organizations.id, input.organizationId))
+      .catch(() => []);
+    orgName = org?.name ?? "Inmobiliaria";
+  }
+  const text = `${input.reopened ? "↺ Volvió a pasar" : "⚠ Nuevo incidente"} · ${MODULE_LABEL[input.module]} · ${orgName}\n${input.message}`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text, content: text }),
+    signal: AbortSignal.timeout(5_000),
+  }).catch(() => {});
 }
 
 // Marca resuelto lo que ya no falla, sin dejar la bandeja llena de cosas viejas.

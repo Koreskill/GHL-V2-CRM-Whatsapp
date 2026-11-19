@@ -121,21 +121,28 @@ export async function readSheet(spreadsheetId: string, gid?: string | null): Pro
     if (!token) {
       return { success: false, error: "No se pudo autenticar la cuenta de servicio de Google" };
     }
-    // Sin rango: la API devuelve la hoja entera de la primera pestaña.
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/A:Z`;
-    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
-    if (!res) return { success: false, error: "No se pudo contactar a Google Sheets" };
-    if (res.status === 403) {
-      return {
-        success: false,
-        error: `La hoja no está compartida con ${sa.client_email}. Compartila con ese email como lector.`,
-      };
-    }
-    if (res.status === 404) return { success: false, error: "No existe una hoja con ese identificador" };
-    if (!res.ok) return { success: false, error: `Google Sheets respondió ${res.status}` };
+    const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`;
+    const get = async (url: string): Promise<{ ok: true; data: Record<string, unknown> | null } | { ok: false; error: string }> => {
+      const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+      if (!res) return { ok: false, error: "No se pudo contactar a Google Sheets" };
+      if (res.status === 403) return { ok: false, error: `La hoja no está compartida con ${sa.client_email}. Compartila con ese email como lector.` };
+      if (res.status === 404) return { ok: false, error: "No existe una hoja con ese identificador" };
+      if (!res.ok) return { ok: false, error: `Google Sheets respondió ${res.status}` };
+      return { ok: true, data: (await res.json().catch(() => null)) as Record<string, unknown> | null };
+    };
 
-    const data = (await res.json().catch(() => null)) as { values?: string[][] } | null;
-    return { success: true, rows: data?.values ?? [], mode: "service_account" };
+    // La pestaña del gid configurado (o la primera), igual que el export CSV.
+    const meta = await get(`${base}?fields=sheets.properties(sheetId,title)`);
+    if (!meta.ok) return { success: false, error: meta.error };
+    const tabs = ((meta.data?.sheets ?? []) as { properties?: { sheetId?: number; title?: string } }[]).map((s) => s.properties ?? {});
+    const tab = gid ? tabs.find((t) => String(t.sheetId) === gid) : tabs[0];
+    if (!tab?.title) return { success: false, error: gid ? "La hoja no tiene una pestaña con ese gid" : "La hoja no tiene pestañas" };
+
+    // Solo el nombre de la pestaña como rango: trae todas las columnas (con A:Z se cortaba en la Z).
+    const range = `'${tab.title.replace(/'/g, "''")}'`;
+    const values = await get(`${base}/values/${encodeURIComponent(range)}`);
+    if (!values.ok) return { success: false, error: values.error };
+    return { success: true, rows: (values.data?.values as string[][] | undefined) ?? [], mode: "service_account" };
   }
 
   // Respaldo sin credenciales: export CSV de una hoja publicada.

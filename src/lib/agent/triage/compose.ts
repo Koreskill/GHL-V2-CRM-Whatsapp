@@ -3,6 +3,7 @@ import { aiDecide, readChoice, readNoul, readScore } from "@/lib/ai/decisions";
 import { resolveModel } from "@/lib/ai/openrouter";
 import { reportIncident } from "@/lib/incidents/report";
 import type { ResolvedAgentConfig } from "../config";
+import { FIRST_REPLY_ROUTES, pickFirstStep } from "../first-replies";
 import { detectOperation, extractAmounts, loadOfferableCatalog, normalize, type CatalogProperty } from "./catalog-search";
 import { buildTriageContext, stateForDecision, type TriageContext } from "./context";
 import { extractProfileFields, type ExtractedFields } from "./extract";
@@ -92,6 +93,8 @@ export type ComposeResult = {
   visitRequest: { propertyId: string; note: string } | null;
   /** Cómo salió la respuesta: del modelo, del modelo tras corregirse, o armada por código. */
   source: "modelo" | "modelo_corregido" | "modelo_respaldo" | "determinista" | null;
+  /** Paso del guion de primeras respuestas que guió esta respuesta (empieza en 1), o null. */
+  firstReply: { step: number; total: number } | null;
   error: string | null;
 };
 
@@ -196,6 +199,7 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
     notifyTeam: false,
     visitRequest: null,
     source: null,
+    firstReply: null,
     error: null,
   };
 
@@ -386,6 +390,16 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
       lastBotMessage,
     });
 
+  // Guion de primeras respuestas: solo en las rutas comerciales y nunca en una derivación.
+  const firstStep =
+    !routing.handoff && (FIRST_REPLY_ROUTES as readonly string[]).includes(routing.route)
+      ? pickFirstStep(config.firstReplies, {
+          botReplies: ctx.salientes.delBot,
+          otherOutbound: ctx.salientes.deOtros,
+          origin: ctx.origen,
+        })
+      : null;
+
   const genArgs = {
     ctx,
     retrieval: offeredForTurn,
@@ -395,6 +409,7 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
     handoff: routing.handoff,
     orgPrompt: config.systemPrompt,
     known,
+    firstStep,
   };
 
   // ── 4. Redacción, con respaldo si el modelo falla ──
@@ -574,6 +589,7 @@ export async function composeReply(input: Input): Promise<ComposeResult> {
           : "El modelo no produjo texto",
     violations: [],
     source,
+    firstReply: firstStep ? { step: firstStep.index + 1, total: firstStep.total } : null,
     error: null,
   };
 }

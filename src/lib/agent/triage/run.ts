@@ -10,6 +10,10 @@ import {
   visits,
   type TriageStatus,
 } from "@/db/schema";
+import { canAutomate } from "@/lib/agency/lifecycle";
+import { OPT_OUT_ACK, isOptOutRequest } from "@/lib/crm/opt-out";
+import { deriveEarlierMedia, deriveMessage, firstReadable, type Derivation } from "@/lib/inbox/derivations";
+import { attachmentsFromPayload, MEDIA_WITH_ARTICLE } from "@/lib/inbox/media";
 import { reportIncident } from "@/lib/incidents/report";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
@@ -17,6 +21,7 @@ import { clearAgentTyping, setAgentTyping } from "@/lib/inbox/typing";
 import { safeError } from "@/lib/safe-error";
 import { resolveAgentConfig } from "../config";
 import { composeReply, DEFAULT_DECISION_MODEL, type ComposeResult } from "./compose";
+import { planIncoming, unusableAck, unusableReason, type IncomingPlan } from "./incoming";
 import { markPropertyShown } from "./tags";
 import { DEFAULT_POLICY, type RoutingPolicy } from "./routes";
 
@@ -35,7 +40,8 @@ export { DEFAULT_DECISION_MODEL };
 // Si el trabajo se procesa mucho después, no se contesta como si el mensaje fuera de recién.
 const MAX_DELAY_MS = 10 * 60 * 1000;
 const MAX_PER_CONVERSATION_HOUR = 20;
-const maxPerHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR) || 300;
+const maxPerOrgHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR) || 300;
+const maxGlobalHour = () => Number(process.env.AGENT_MAX_REPLIES_PER_HOUR_GLOBAL) || 3000;
 
 export type TriageResult =
   | { status: "skipped"; reason: string }
@@ -78,12 +84,31 @@ export async function resolvePolicy(orgId: string, channel: string): Promise<Pol
  * El índice único sobre message_id hace que dos corridas simultáneas del mismo mensaje
  * (un reintento del webhook, por ejemplo) no lo clasifiquen ni lo contesten dos veces.
  */
+// Una corrida que reclamó y murió (reinicio, caída) deja la fila "en proceso". Pasado este tiempo, el
+// reintento de la cola la retoma en vez de saltearla como "ya procesada": el cliente no queda sin respuesta.
+const ABANDONED_CLAIM_MS = 5 * 60_000;
+
 async function claim(input: { organizationId: string; conversationId: string; messageId: string }): Promise<string | null> {
-  const [row] = await getDb()
+  let [row] = await getDb()
     .insert(messageTriage)
     .values({ ...input, status: "error", error: "en proceso" })
     .onConflictDoNothing({ target: messageTriage.messageId })
     .returning({ id: messageTriage.id });
+  if (!row) {
+    [row] = await getDb()
+      .update(messageTriage)
+      .set({ updatedAt: sql`now()`, error: "en proceso (retomado)" })
+      .where(
+        and(
+          eq(messageTriage.messageId, input.messageId),
+          eq(messageTriage.organizationId, input.organizationId),
+          eq(messageTriage.status, "error"),
+          sql`${messageTriage.error} like 'en proceso%'`,
+          sql`${messageTriage.updatedAt} < now() - (${ABANDONED_CLAIM_MS / 1000} * interval '1 second')`,
+        ),
+      )
+      .returning({ id: messageTriage.id });
+  }
   if (row) {
     // Un mensaje nuevo del cliente deja obsoleto cualquier borrador anterior de ese hilo: respondía a
     // otra cosa y mandarlo sería contestar fuera de contexto.
@@ -267,23 +292,109 @@ function persistable(c: ComposeResult) {
         ? { modo: c.retrieval.mode, ofrecidas: c.retrieval.offered.length, coincidencias: c.retrieval.totalExact }
         : null,
       _bloqueos: c.violations.map((v) => v.code),
+      // Si la respondió el guion de primeras respuestas: en qué paso iba.
+      _guion: c.firstReply,
     },
     handoffReason: c.handoffReason,
   };
+}
+
+/**
+ * El mensaje trae un medio que no se pudo usar (un video, un audio que falló o no se entiende…). No se pierde:
+ * queda en la campanita con el motivo y, en modo automático, la persona recibe un acuse fijo. NO se pausa la IA:
+ * si después escribe texto, el agente lo atiende; es el medio lo que tiene que ver una persona.
+ */
+async function answerUnusableMedia(input: {
+  conv: typeof conversations.$inferSelect;
+  triageId: string;
+  triggerId: string;
+  plan: Extract<IncomingPlan, { kind: "unusable" }>;
+  autoReply: Policy["autoReply"];
+}): Promise<TriageResult> {
+  const { conv, triageId, triggerId, plan } = input;
+  // Un sticker no es una consulta: se registra y no se molesta a nadie.
+  if (plan.media === "sticker") {
+    await finish(triageId, { status: "descartado", error: null, routeReason: "Sticker: no requiere respuesta" });
+    return { status: "descartado", triageId };
+  }
+
+  // Una falla del sistema (descarga, modelo caído) es un incidente; "no se entiende el audio" no lo es.
+  if (plan.failed && !plan.unreadable) {
+    await reportIncident({
+      organizationId: conv.organizationId,
+      module: "agente",
+      key: `medios:${plan.media}`,
+      message: `No se pudo leer ${MEDIA_WITH_ARTICLE[plan.media]} que mandó un contacto`,
+      detail: plan.error ?? "sin detalle",
+      severity: "advertencia",
+      context: { channel: conv.channel },
+    });
+  }
+
+  let ackId: string | null = null;
+  const ack = unusableAck(plan.media);
+  if (input.autoReply === "auto" && ack) {
+    const sent = await deliverMessage(conv.id, { text: ack, source: "agent", organizationId: conv.organizationId, idempotencyKey: `media-ack:${triggerId}` });
+    if (sent.ok) ackId = sent.message.id;
+  }
+  const reason = unusableReason(plan);
+  await finish(triageId, { status: "derivado", routeReason: reason, handoffReason: reason, sentMessageId: ackId, error: null });
+  return { status: "derivado", triageId };
+}
+
+/** Pidió la baja de mensajes comerciales por audio: se marca al contacto y se confirma, sin pasar por el modelo. */
+async function answerAudioOptOut(input: {
+  conv: typeof conversations.$inferSelect;
+  triageId: string;
+  triggerId: string;
+  autoReply: Policy["autoReply"];
+}): Promise<TriageResult> {
+  const { conv, triageId, triggerId } = input;
+  if (conv.contactId) {
+    await getDb().execute(sql`
+      update contacts set marketing_opt_out_at = coalesce(marketing_opt_out_at, now()),
+        marketing_opt_out_source = coalesce(marketing_opt_out_source, 'audio'), updated_at = now()
+      where id = ${conv.contactId} and organization_id = ${conv.organizationId}
+    `);
+  }
+  let ackId: string | null = null;
+  if (input.autoReply === "auto") {
+    const sent = await deliverMessage(conv.id, { text: OPT_OUT_ACK, source: "agent", organizationId: conv.organizationId, idempotencyKey: `optout:${triggerId}` });
+    if (sent.ok) ackId = sent.message.id;
+  }
+  await finish(triageId, { status: "descartado", routeReason: "Pidió la baja de mensajes comerciales por audio", sentMessageId: ackId, error: null });
+  return { status: "descartado", triageId };
 }
 
 export async function triageIncomingMessage(conversationId: string, opts: { triggerMessageId: string }): Promise<TriageResult> {
   const db = getDb();
 
   const [trigger] = await db
-    .select({ id: messages.id, sentAt: messages.sentAt, direction: messages.direction, body: messages.body })
+    .select({ id: messages.id, sentAt: messages.sentAt, direction: messages.direction, body: messages.body, rawPayload: messages.rawPayload })
     .from(messages)
     .where(and(eq(messages.id, opts.triggerMessageId), eq(messages.conversationId, conversationId)));
   if (!trigger || trigger.direction !== "inbound") return { status: "skipped", reason: "trigger_not_found" };
-  if (Date.now() - trigger.sentAt.getTime() > MAX_DELAY_MS) return { status: "skipped", reason: "stale" };
 
   const [conv] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!conv) return { status: "skipped", reason: "conversation_not_found" };
+  // Suspendida: el mensaje quedó guardado, pero nada automático contesta (ver agency/lifecycle.ts).
+  if (!(await canAutomate(conv.organizationId))) return { status: "skipped", reason: "org_inactive" };
+
+  // Vencido: ya no se contesta solo (sería fuera de contexto), pero NO se pierde en silencio: si el bot
+  // tenía que contestar y nadie lo hizo, queda en la campanita para una persona.
+  if (Date.now() - trigger.sentAt.getTime() > MAX_DELAY_MS) {
+    if (conv.aiEnabled && !(await superseded(conversationId, trigger)) && (await resolveAgentConfig(conv.organizationId, conv.channel)).enabled) {
+      const staleId = await claim({ organizationId: conv.organizationId, conversationId, messageId: trigger.id });
+      if (staleId) {
+        await finish(staleId, {
+          status: "derivado",
+          routeReason: "No se respondió a tiempo (demora o caída del sistema): lo tiene que contestar una persona",
+          error: null,
+        });
+      }
+    }
+    return { status: "skipped", reason: "stale" };
+  }
 
   // Doble interruptor: el hilo Y el canal.
   if (!conv.aiEnabled) return { status: "skipped", reason: "conversation_ai_off" };
@@ -292,20 +403,26 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
   if (computeWindow(conv.channel, conv.lastInboundAt).state !== "open") return { status: "skipped", reason: "window_closed" };
   if (await superseded(conversationId, trigger)) return { status: "skipped", reason: "superseded" };
 
-  const text = trigger.body?.trim();
-  if (!text) return { status: "skipped", reason: "empty_message" };
+  // Un mensaje sin texto pero con un adjunto (audio, foto…) NO se descarta: se lee más abajo, o queda para una persona.
+  const caption = trigger.body?.trim() ?? "";
+  const media = attachmentsFromPayload(trigger.rawPayload);
+  if (!caption && media.length === 0) return { status: "skipped", reason: "empty_message" };
 
   // Topes de gasto antes de llamar a ningún modelo.
-  const [usage] = await db.execute<{ conv: number; total: number }>(sql`
+  // Tres topes: por conversación, por inmobiliaria y GLOBAL (todas juntas). Antes el "global" se contaba
+  // por inmobiliaria, así que con N clientes el techo real era N veces el configurado.
+  const [usage] = await db.execute<{ conv: number; org: number; total: number }>(sql`
     select
       count(*) filter (where conversation_id = ${conversationId})::int as conv,
+      count(*) filter (where organization_id = ${conv.organizationId})::int as org,
       count(*)::int as total
     from messages
     where direction = 'outbound' and raw_payload->>'source' = 'agent'
-      and organization_id = ${conv.organizationId} and sent_at >= now() - interval '1 hour'
+      and sent_at >= now() - interval '1 hour'
   `);
   if (usage.conv >= MAX_PER_CONVERSATION_HOUR) return { status: "skipped", reason: "limit_conversation" };
-  if (usage.total >= maxPerHour()) return { status: "skipped", reason: "limit_global" };
+  if (usage.org >= maxPerOrgHour()) return { status: "skipped", reason: "limit_org" };
+  if (usage.total >= maxGlobalHour()) return { status: "skipped", reason: "limit_global" };
   if (!process.env.OPENROUTER_API_KEY) return { status: "skipped", reason: "openrouter_key_missing" };
 
   // Idempotencia: si ya lo reclamó otra corrida, se corta sin gastar nada.
@@ -321,6 +438,29 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
   await setAgentTyping(conversationId, conv.organizationId, db);
 
   try {
+    // ── Medios: leer el audio o la imagen ANTES de clasificar ──
+    let text = caption;
+    // Los medios de mensajes ANTERIORES de la ráfaga, siempre: un audio seguido de un texto genera dos trabajos pero
+    // solo contesta el del texto, y ese tiene que ver lo que decía el audio. Sin medios pendientes no hace nada.
+    await deriveEarlierMedia({ organizationId: conv.organizationId, conversationId, exceptMessageId: trigger.id }).catch(() => {});
+    if (media.length) {
+      const readable = firstReadable(trigger.rawPayload);
+      let read: Derivation | null = null;
+      if (readable) {
+        read = await deriveMessage({ organizationId: conv.organizationId, conversationId, messageId: trigger.id, rawPayload: trigger.rawPayload });
+      }
+      const plan = planIncoming({ caption, media, read });
+
+      if (plan.kind === "unusable") {
+        return await answerUnusableMedia({ conv, triageId, triggerId: trigger.id, plan, autoReply: policy.autoReply });
+      }
+      // Pidió la baja por audio: se respeta igual que si la hubiera escrito.
+      if (plan.transcript && isOptOutRequest(plan.transcript)) {
+        return await answerAudioOptOut({ conv, triageId, triggerId: trigger.id, autoReply: policy.autoReply });
+      }
+      text = plan.text;
+    }
+
     const composed = await composeReply({
       organizationId: conv.organizationId,
       conversationId,
@@ -371,8 +511,11 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
     // ── Política de baja confianza (OPE-005 §7) ──
     // Una pregunta de aclaración nacida de la duda del clasificador, o un texto armado por código
     // porque el modelo falló o inventó datos, NUNCA salen solos: quedan de borrador para una persona.
+    // Excepción: un paso del guion de primeras respuestas. Lo escribió un administrador y el mensaje típico
+    // de un anuncio ("hola, quiero más información") sale con confianza baja; sin esto, el guion nunca
+    // contestaría justo ahí. Un texto armado por código sigue siendo borrador.
     const needsReview =
-      route === "aclaracion" || (composed.source === "determinista" && composed.disposition === "responder");
+      (route === "aclaracion" && !composed.firstReply) || (composed.source === "determinista" && composed.disposition === "responder");
     if (needsReview && policy.autoReply === "auto" && composed.text) {
       await finish(triageId, {
         ...record,

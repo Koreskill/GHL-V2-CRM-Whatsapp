@@ -1,6 +1,7 @@
 import { authorize, jsonError } from "@/lib/api";
 import { requestOrigin } from "@/lib/request-origin";
 import { getConnectUrl } from "@/lib/zernio/accounts";
+import { isAllowedConnectUrl } from "@/lib/zernio/connect-url";
 
 const PLATFORMS = new Set(["whatsapp", "instagram", "facebook"] as const);
 
@@ -19,19 +20,19 @@ export async function GET(req: Request) {
     console.error("[accounts] no se pudo obtener la URL de conexión:", res.success ? "sin authUrl" : res.error.status, res.success ? "" : res.error.code);
     return jsonError(502, "Zernio no devolvió el link de conexión. Probá de nuevo en unos minutos.");
   }
-  // El navegador va a navegar a esta URL: solo https de Zernio (nunca javascript: ni otro dominio).
-  if (!isZernioUrl(res.data.authUrl)) {
-    console.error("[accounts] URL de conexión inesperada, descartada");
+  // El navegador va a navegar a esta URL: solo https y solo los dominios de ese flujo (Zernio o Meta).
+  if (!isAllowedConnectUrl(res.data.authUrl, platform as "whatsapp" | "instagram" | "facebook")) {
+    console.error("[accounts] URL de conexión inesperada, descartada:", safeHost(res.data.authUrl));
     return jsonError(502, "Zernio devolvió un link de conexión inválido.");
   }
   return Response.json({ authUrl: res.data.authUrl });
 }
 
-function isZernioUrl(value: string) {
+// Solo el dominio, para el log: el enlace entero lleva el estado de la autorización.
+function safeHost(value: string) {
   try {
-    const url = new URL(value);
-    return url.protocol === "https:" && (url.hostname === "zernio.com" || url.hostname.endsWith(".zernio.com"));
+    return new URL(value).hostname;
   } catch {
-    return false;
+    return "ilegible";
   }
 }

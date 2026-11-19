@@ -309,20 +309,34 @@ export async function syncPropertiesFromSheet(orgId: string): Promise<SyncResult
   // Lo que ya no está en la hoja se PAUSA, no se borra: su historial (oportunidades, visitas)
   // tiene que seguir existiendo.
   const ids = [...seenIds];
-  const paused = await db
-    .update(properties)
-    .set({ status: "pausada", syncedAt: new Date() })
-    .where(
-      and(
-        eq(properties.organizationId, orgId),
-        eq(properties.source, "google_sheets"),
-        ids.length ? notInArray(properties.externalId, ids) : sql`true`,
-        notInArray(properties.status, ["pausada"]),
-        // Una propiedad editada a mano tampoco se pausa sola.
-        isNull(properties.manuallyEditedAt),
-      ),
-    )
-    .returning({ id: properties.id });
+  if (!ids.length) {
+    // Una hoja vaciada por error pausaría toda la cartera y el bot diría "no tengo": no se pausa nada.
+    issues.push("La hoja no trajo ninguna propiedad con property_id: no se pausó nada");
+    await reportIncident({
+      organizationId: orgId,
+      module: "sheets",
+      key: "hoja-sin-filas",
+      severity: "advertencia",
+      message: "La hoja de propiedades no trajo ninguna propiedad: no se pausó nada. Revisá que no se haya vaciado o cambiado de pestaña.",
+      retryTarget: "sheets:sync",
+    });
+  }
+  const paused = ids.length
+    ? await db
+        .update(properties)
+        .set({ status: "pausada", syncedAt: new Date() })
+        .where(
+          and(
+            eq(properties.organizationId, orgId),
+            eq(properties.source, "google_sheets"),
+            notInArray(properties.externalId, ids),
+            notInArray(properties.status, ["pausada"]),
+            // Una propiedad editada a mano tampoco se pausa sola.
+            isNull(properties.manuallyEditedAt),
+          ),
+        )
+        .returning({ id: properties.id })
+    : [];
   if (paused.length) issues.push(`${paused.length} propiedad(es) ya no están en la hoja: quedaron pausadas`);
   if (protegidas) {
     issues.push(

@@ -1,0 +1,1 @@
+ALTER TABLE "agent_configs" ADD COLUMN "first_replies" jsonb;

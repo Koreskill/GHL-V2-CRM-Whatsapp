@@ -27,9 +27,12 @@ export async function changeConversationStatus(formData: FormData) {
   redirect(status === "archivada" ? "/conversaciones" : `/conversaciones/${conversationId}?tab=${status === "desactiva" ? "desactivas" : "activas"}`);
 }
 
+// Delegar y tomar delegaciones mueve datos personales de un contacto a OTRA inmobiliaria: solo un
+// administrador (auditoría 2026-10-19, H-05). Falta todavía destinatario explícito y consentimiento del contacto.
 export async function delegateConversationAction(formData: FormData) {
   const { session, orgId } = await authorizeAction();
   const conversationId = idOf(formData);
+  if (session.role !== "admin") redirect(`/conversaciones/${conversationId}?error=${encodeURIComponent("Solo un administrador puede delegar una conversación a otra inmobiliaria.")}`);
   const res = await createDelegation({
     orgId,
     userId: session.user.id,
@@ -43,6 +46,7 @@ export async function delegateConversationAction(formData: FormData) {
 
 export async function takeDelegationAction(formData: FormData) {
   const { session, orgId } = await authorizeAction();
+  if (session.role !== "admin") redirect(`/conversaciones?tab=delegadas&error=${encodeURIComponent("Solo un administrador puede tomar una delegación.")}`);
   const res = await takeDelegation({ orgId, userId: session.user.id, delegationId: idOf(formData, "delegationId") });
   revalidatePath("/conversaciones");
   if (!res.ok) redirect(`/conversaciones?tab=delegadas&error=${encodeURIComponent(res.error)}`);

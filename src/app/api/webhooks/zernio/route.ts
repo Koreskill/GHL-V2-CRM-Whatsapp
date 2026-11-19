@@ -1,4 +1,3 @@
-import { after } from "next/server";
 import { getDb } from "@/db";
 import { isCronAuthorized } from "@/lib/cron-auth";
 import { claimEvent, listStuckEvents, processEvent } from "@/lib/inbox/webhook-events";
@@ -10,46 +9,27 @@ import { EVENT_HEADER, EVENT_ID_HEADER, SIGNATURE_HEADER, verifyZernioSignature 
 export const dynamic = "force-dynamic";
 
 const MAX_BODY_BYTES = 1_000_000;
-// Espera antes de triaje: si el usuario manda varios mensajes en ráfaga, solo el último
-// pasa el check superseded() y procesa la conversación completa.
-const MESSAGE_BATCH_MS = 5_000;
 
 const ok = (body: Record<string, unknown> = { ok: true }) => Response.json(body, { status: 200 });
 
-function scheduleAgent(result: IngestResult | null) {
-  if (result?.kind === "account" && result.status === "connected") {
-    const { accountExternalId } = result;
-    after(async () => {
-      // Historial que Zernio ya tenía: se importa sin disparar el agente.
-      const [{ importAccountHistory }, { channelAccounts }, { eq }] = await Promise.all([
-        import("@/lib/inbox/import"),
-        import("@/db/schema"),
-        import("drizzle-orm"),
-      ]);
-      const db = getDb();
-      const [account] = await db.select().from(channelAccounts).where(eq(channelAccounts.externalId, accountExternalId));
-      if (!account) return;
-      const r = await importAccountHistory(db, account).catch((err: unknown) => ({ error: safeError(err) }));
-      console.log(`[import] ${account.channel}:`, "error" in r ? r.error : `${r.conversations} conversaciones, ${r.messages} mensajes`);
-    });
-    return;
-  }
-  if (result?.kind !== "message" || !result.inbound || !result.inserted || !result.messageId) return;
-  const { conversationId, messageId } = result;
-  after(async () => {
-    // Batch temporal: si el usuario manda varios mensajes en ráfaga, solo el último procesa.
-    // Los anteriores salen con superseded=true en triageIncomingMessage sin gastar un token.
-    await new Promise<void>((r) => setTimeout(r, MESSAGE_BATCH_MS));
-    // Import dinámico: el grafo del agente no entra en el cold start del webhook.
-    // Triaje: Jev clasifica, el código enruta y GPT redacta. La idempotencia la garantiza
-    // el índice único de message_triage sobre message_id, no este bloque.
-    const { triageIncomingMessage } = await import("@/lib/agent/triage/run");
-    const outcome = await triageIncomingMessage(conversationId, { triggerMessageId: messageId }).catch(
-      (err: unknown) => ({ status: "error" as const, error: safeError(err) }),
-    );
-    // Sin el texto del mensaje ni lo que escribió el modelo: solo el resultado.
-    console.log(`[triaje] ${conversationId}:`, outcome);
-  });
+// El triaje de un mensaje entrante ya quedó ENCOLADO dentro de la transacción de ingesta (ingest.ts):
+// acá no se hace trabajo pesado ni se depende de la memoria del proceso. Lo único que se encola desde
+// acá es la importación del historial de una cuenta recién conectada (sin disparar el agente).
+async function scheduleFollowUp(db: ReturnType<typeof getDb>, result: IngestResult | null) {
+  if (result?.kind !== "account" || result.status !== "connected") return;
+  const [{ channelAccounts }, { eq }, { enqueue }] = await Promise.all([
+    import("@/db/schema"),
+    import("drizzle-orm"),
+    import("@/lib/jobs/queue"),
+  ]);
+  const [account] = await db.select().from(channelAccounts).where(eq(channelAccounts.externalId, result.accountExternalId));
+  if (!account || account.historyImportedAt) return;
+  await enqueue({
+    organizationId: account.organizationId,
+    kind: "account_import",
+    dedupeKey: `account_import:${account.id}`,
+    payload: { channelAccountId: account.id },
+  }).catch((err: unknown) => console.error(`[import] no se pudo encolar: ${safeError(err)}`));
 }
 
 export async function POST(req: Request) {
@@ -103,8 +83,8 @@ export async function POST(req: Request) {
     });
   }
 
-  // 5. El agente, después de responder.
-  scheduleAgent(result);
+  // 5. Lo que sigue (triaje, importación) ya está en la cola persistente: lo toma el worker.
+  await scheduleFollowUp(db, result);
 
   // 6. 200 siempre: un evento desconocido o que falló queda para el barrido, no para un 500.
   return ok({ ok: true, result: result?.kind ?? "deferred" });
@@ -121,7 +101,7 @@ export async function GET(req: Request) {
     const result = await processEvent(db, event.eventId, event.payload as ZernioWebhookPayload);
     if (result) {
       summary.processed++;
-      scheduleAgent(result);
+      await scheduleFollowUp(db, result);
     } else {
       summary.failed++;
     }

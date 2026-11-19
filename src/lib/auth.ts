@@ -37,6 +37,8 @@ export const getSession = cache(async (): Promise<Session | null> => {
   if (await membershipBlocked(user.id, homeOrganizationId)) return null;
 
   const agencyAdmin = isAgencyAdmin(user);
+  // Inmobiliaria suspendida o eliminada: sus usuarios no entran (la agencia sí, para revisarla).
+  if (!agencyAdmin && !(await homeOrgAllowsAccess(homeOrganizationId))) return null;
   let organizationId = homeOrganizationId;
   let actingAsClient = false;
 
@@ -77,6 +79,16 @@ async function membershipBlocked(userId: string, orgId: string): Promise<boolean
     return Boolean(row && row.status !== "active");
   } catch {
     return true;
+  }
+}
+
+// Si la base no contesta se niega, igual que con la membresía.
+async function homeOrgAllowsAccess(orgId: string): Promise<boolean> {
+  try {
+    const { accessAllowed, orgStatus } = await import("@/lib/agency/lifecycle");
+    return accessAllowed(await orgStatus(orgId));
+  } catch {
+    return false;
   }
 }
 

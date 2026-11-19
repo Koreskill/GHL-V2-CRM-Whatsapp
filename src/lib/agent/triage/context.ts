@@ -1,7 +1,11 @@
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
+import { readAttribution, type AdOrigin } from "@/lib/inbox/attribution";
+import { loadDerivations, type DerivationKind } from "@/lib/inbox/derivations";
+import { derivedForPrompt } from "@/lib/inbox/media";
 import {
   contacts,
+  conversations,
   dealProperties,
   deals,
   messages,
@@ -72,6 +76,10 @@ export type TriageContext = {
   } | null;
   propiedadesDeInteres: TriageProperty[];
   visitas: { propiedad: string; estado: string; fecha: string | null }[];
+  /** Anuncio o enlace por el que llegó la conversación (conversations.metadata.attribution). */
+  origen: AdOrigin | null;
+  /** Para saber en qué paso del guion de primeras respuestas está el bot. */
+  salientes: { delBot: number; deOtros: number };
 };
 
 function faltantes(p: {
@@ -104,10 +112,10 @@ export async function buildTriageContext(input: {
   const db = getDb();
   const { organizationId, conversationId, contactId } = input;
 
-  const [history, contact, dealRow] = await Promise.all([
+  const [history, contact, dealRow, [convRow], [outbound]] = await Promise.all([
     // Historial de ESTA conversación, no del contacto: no se mezcla WhatsApp con Instagram.
     db
-      .select({ direction: messages.direction, body: messages.body, type: messages.type })
+      .select({ id: messages.id, direction: messages.direction, body: messages.body, type: messages.type })
       .from(messages)
       .where(
         and(
@@ -150,6 +158,23 @@ export async function buildTriageContext(input: {
           .orderBy(desc(deals.updatedAt))
           .limit(1)
       : Promise.resolve([]),
+
+    db
+      .select({ metadata: conversations.metadata })
+      .from(conversations)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.organizationId, organizationId)))
+      .limit(1),
+
+    // Salientes de ESTA conversación, separando al bot de todo lo demás (una persona, una campaña,
+    // un seguimiento, la app de WhatsApp). Sale de la base y no del historial recortado a 12 mensajes.
+    db.execute<{ bot: number; otros: number }>(sql`
+      select
+        count(*) filter (where raw_payload->>'source' = 'agent')::int as bot,
+        count(*) filter (where coalesce(raw_payload->>'source', '') <> 'agent')::int as otros
+      from messages
+      where conversation_id = ${conversationId} and organization_id = ${organizationId}
+        and direction = 'outbound' and status <> 'failed'
+    `),
   ]);
 
   const deal = dealRow[0] ?? null;
@@ -231,6 +256,14 @@ export async function buildTriageContext(input: {
 
   const req = requirement[0] ?? null;
 
+  // Audios e imágenes de la persona, ya leídos por un modelo: el agente los ve como texto, marcados como lectura automática.
+  const derived = await loadDerivations(organizationId, history.map((m) => m.id)).catch(() => new Map<string, { kind: DerivationKind; text: string; model: string | null }>());
+  const textOf = (m: (typeof history)[number]) => {
+    const d = derived.get(m.id);
+    const read = d ? derivedForPrompt(d.kind, d.text) : null;
+    return m.body ? [m.body, read].filter(Boolean).join("\n") : (read ?? `[${m.type}]`);
+  };
+
   return {
     organizationId,
     conversationId,
@@ -241,7 +274,7 @@ export async function buildTriageContext(input: {
       .reverse()
       .map((m) => ({
         de: m.direction === "inbound" ? ("contacto" as const) : ("inmobiliaria" as const),
-        texto: (m.body ?? `[${m.type}]`).slice(0, MAX_CHARS),
+        texto: textOf(m).slice(0, MAX_CHARS),
       })),
     oportunidad: deal
       ? {
@@ -287,6 +320,8 @@ export async function buildTriageContext(input: {
       estado: v.status,
       fecha: v.scheduledAt?.toISOString() ?? null,
     })),
+    origen: readAttribution(convRow?.metadata),
+    salientes: { delBot: Number(outbound?.bot ?? 0), deOtros: Number(outbound?.otros ?? 0) },
   };
 }
 

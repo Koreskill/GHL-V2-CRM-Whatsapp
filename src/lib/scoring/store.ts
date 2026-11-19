@@ -11,7 +11,7 @@ import {
 } from "@/db/schema";
 import { listNetworkCatalog } from "@/lib/properties/queries";
 import { SCORING, bandOf, type Band } from "./config";
-import { selectCandidates, type NetworkRow, type OwnRow } from "./candidates";
+import { OFFERABLE, selectCandidates, type NetworkRow, type OwnRow } from "./candidates";
 import { parseManualInput } from "./input";
 import {
   CRITERIA_KEYS,
@@ -266,7 +266,9 @@ export async function getRecommendations(orgId: string, conversationId: string, 
     const base = { score: s.score, band: bandOf(s.score), confidence: Number(s.confidence), matched: s.matched, conflicting: s.conflicting, missing: s.missing, updatedAt: s.updatedAt.toISOString() };
     if (s.kind === "cartera" && s.propertyId) {
       const p = propById.get(s.propertyId);
-      if (!p) continue; // salió de la cartera o no es de esta organización
+      // Salió de la cartera, no es de esta organización o ya no se ofrece (pausada al cambiar la hoja, vendida…):
+      // el puntaje guardado puede ser anterior al cambio, así que se vuelve a filtrar al leer.
+      if (!p || !(OFFERABLE as readonly string[]).includes(p.status)) continue;
       const slug = slugOf.get(p.id);
       out.cartera.push({
         ...base,

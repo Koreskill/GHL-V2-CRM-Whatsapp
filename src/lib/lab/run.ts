@@ -144,6 +144,7 @@ async function runScenario(orgId: string, scenario: LabScenario): Promise<{ turn
         provider: "zernio",
         externalId: `lab-${randomUUID()}`,
         lastInboundAt: new Date(),
+        metadata: scenario.attribution ? { attribution: scenario.attribution } : {},
       })
       .returning();
 
