@@ -108,6 +108,8 @@ export function ChatView({
       error: null,
       sentAt: new Date().toISOString(),
       source: "human",
+      attachments: [],
+      transcript: null,
       local: true,
     };
     setLocal((prev) => [...prev, optimistic]);
@@ -317,7 +319,8 @@ function ReportButton({ messageId }: { messageId: string }) {
 
 function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () => void }) {
   const out = m.direction === "outbound";
-  const text = m.body ?? (m.type !== "text" ? `[${m.type}]` : "");
+  // Con un medio visible (reproductor, miniatura), el marcador "[audio]" sobra.
+  const text = m.body ?? (m.type !== "text" && m.attachments.length === 0 ? `[${m.type}]` : "");
   return (
     <div className={cn("flex", out ? "justify-end" : "justify-start")}>
       <div
@@ -343,7 +346,8 @@ function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () =
             <FileText className="size-3" /> Plantilla
           </span>
         )}
-        <p className="break-words whitespace-pre-wrap">{text}</p>
+        {m.attachments.length > 0 && <MediaBlock messageId={m.id} attachments={m.attachments} transcript={m.transcript} out={out} />}
+        {text && <p className="break-words whitespace-pre-wrap">{text}</p>}
         <span className={cn("mt-0.5 flex items-center justify-end gap-1 text-[10.5px]", out && m.status !== "failed" ? "text-white/70" : "text-muted")}>
           {formatTime(m.sentAt)}
           {out && <StatusIcon status={m.status} />}
@@ -365,6 +369,54 @@ function Bubble({ message: m, onRetry }: { message: LocalMessage; onRetry?: () =
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// Audio, imagen, video o archivo de un mensaje. Se piden a la ruta del CRM, que baja el medio con la clave del
+// servidor (los de WhatsApp exigen autenticación). La lectura automática se muestra aparte y marcada como tal.
+const MEDIA_NAME: Record<string, string> = { audio: "audio", image: "imagen", video: "video", file: "archivo", sticker: "sticker", share: "contenido compartido", unknown: "adjunto" };
+
+function MediaBlock({
+  messageId,
+  attachments,
+  transcript,
+  out,
+}: {
+  messageId: string;
+  attachments: ChatMessage["attachments"];
+  transcript: ChatMessage["transcript"];
+  out: boolean;
+}) {
+  const muted = out ? "text-white/70" : "text-muted";
+  return (
+    <div className="mb-1 flex flex-col gap-1.5">
+      {attachments.map((a) => {
+        const src = `/api/messages/${messageId}/media?i=${a.index}`;
+        const name = MEDIA_NAME[a.kind] ?? "adjunto";
+        if (!a.available || messageId.startsWith("tmp-")) return <span key={a.index} className={cn("text-[12.5px]", muted)}>[{name} no disponible]</span>;
+        if (a.kind === "audio") return <audio key={a.index} controls preload="none" src={src} className="h-9 w-64 max-w-full" />;
+        if (a.kind === "image" || a.kind === "sticker") {
+          return (
+            <a key={a.index} href={src} target="_blank" rel="noopener noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element -- medio servido por el propio CRM, sin optimizar */}
+              <img src={src} alt="Imagen del mensaje" loading="lazy" className="max-h-64 max-w-full rounded-lg object-cover" />
+            </a>
+          );
+        }
+        if (a.kind === "video") return <video key={a.index} controls preload="metadata" src={src} className="max-h-64 max-w-full rounded-lg" />;
+        return (
+          <a key={a.index} href={src} target="_blank" rel="noopener noreferrer" className="inline-flex w-fit items-center gap-1 text-[12.5px] underline underline-offset-2">
+            <FileText className="size-3.5" /> Abrir {name}
+          </a>
+        );
+      })}
+      {transcript && (
+        <p className={cn("text-[12.5px] leading-snug", muted)}>
+          <span className="font-semibold">{transcript.kind === "transcripcion" ? "Transcripción automática: " : "Descripción automática: "}</span>
+          {transcript.text}
+        </p>
+      )}
     </div>
   );
 }

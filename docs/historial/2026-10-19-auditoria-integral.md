@@ -76,7 +76,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-01 · La red de propiedades no existe como función del producto — Prod
 
-- **Evidencia:** `publishToNetwork` ([src/lib/properties/queries.ts:94](../src/lib/properties/queries.ts#L94)) solo se llama desde `scripts/test-network-flow.ts`. No hay ningún `insert` sobre `networks` ni `network_members` en `src/`. El candado "En la red / Fuera de la red" de [propiedades/page.tsx:239](../src/app/(app)/propiedades/page.tsx#L239) solo muestra un estado que nadie puede cambiar.
+- **Evidencia:** `publishToNetwork` ([src/lib/properties/queries.ts:94](../../src/lib/properties/queries.ts#L94)) solo se llama desde `scripts/test-network-flow.ts`. No hay ningún `insert` sobre `networks` ni `network_members` en `src/`. El candado "En la red / Fuera de la red" de [propiedades/page.tsx:239](../../src/app/(app)/propiedades/page.tsx#L239) solo muestra un estado que nadie puede cambiar.
 - **Estado:** Verificado. **Severidad:** Crítica (para el modelo de negocio).
 - **Impacto:** la propuesta de valor central (exposición en la red) no se puede entregar. Hoy una red solo se arma a mano por SQL.
 - **Escenario:** una inmobiliaria quiere compartir una propiedad: no tiene botón; la agencia tendría que insertar filas a mano.
@@ -86,7 +86,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-02 · Lo publicado en la red no se actualiza ni respeta la disponibilidad — Prod/Op
 
-- **Evidencia:** la proyección se copia una sola vez al publicar (`shareableFrom`, [queries.ts:11](../src/lib/properties/queries.ts#L11)); la sincronización de la hoja (`src/lib/sheets/properties-sync.ts`) no toca `network_property_listings`. El puntaje de la red no mira `availability` ([src/lib/scoring/candidates.ts](../src/lib/scoring/candidates.ts)). `listNetworkCatalog` ([queries.ts:165](../src/lib/properties/queries.ts#L165)) no comprueba que el **dueño** siga siendo miembro activo.
+- **Evidencia:** la proyección se copia una sola vez al publicar (`shareableFrom`, [queries.ts:11](../../src/lib/properties/queries.ts#L11)); la sincronización de la hoja (`src/lib/sheets/properties-sync.ts`) no toca `network_property_listings`. El puntaje de la red no mira `availability` ([src/lib/scoring/candidates.ts](../../src/lib/scoring/candidates.ts)). `listNetworkCatalog` ([queries.ts:165](../../src/lib/properties/queries.ts#L165)) no comprueba que el **dueño** siga siendo miembro activo.
 - **Estado:** Verificado. **Severidad:** Alta.
 - **Impacto:** una inmobiliaria ofrece a su cliente una propiedad de otra que ya se vendió o cambió de precio. Pierde credibilidad la red entera.
 - **Escenario:** A publica a USD 120.000, la vende y la marca en la hoja; la red sigue mostrándola como publicada a 120.000.
@@ -96,7 +96,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-03 · Las recomendaciones de la red no identifican a la inmobiliaria responsable — Prod
 
-- **Evidencia:** [src/lib/scoring/store.ts:285](../src/lib/scoring/store.ts#L285) arma la tarjeta de la red sin el nombre del dueño; `recommendations-panel.tsx` tampoco lo muestra. `property_presentations.ownerNotifiedAt` se marca al pedir visita ([presentations/queries.ts:98](../src/lib/presentations/queries.ts#L98)) pero no se envía ningún aviso, y ninguna pantalla crea presentaciones.
+- **Evidencia:** [src/lib/scoring/store.ts:285](../../src/lib/scoring/store.ts#L285) arma la tarjeta de la red sin el nombre del dueño; `recommendations-panel.tsx` tampoco lo muestra. `property_presentations.ownerNotifiedAt` se marca al pedir visita ([presentations/queries.ts:98](../../src/lib/presentations/queries.ts#L98)) pero no se envía ningún aviso, y ninguna pantalla crea presentaciones.
 - **Estado:** Verificado. **Severidad:** Alta.
 - **Impacto:** el asesor no sabe con quién coordinar; la inmobiliaria dueña no se entera de que hay un interesado. Sin atribución no hay reparto de comisión trazable.
 - **Recomendación:** mostrar el dueño y las condiciones de colaboración en cada tarjeta; botón "Presentar a este contacto" que cree la `property_presentation`; aviso real a la dueña (campanita + correo) cuando se pide visita, sin exponer el contacto hasta que la dueña acepte.
@@ -105,7 +105,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-04 · El aislamiento entre inmobiliarias depende solo del código — Seg
 
-- **Evidencia:** todas las políticas para `crm_app` son `USING (true) WITH CHECK (true)` ([drizzle/0002_crm_app_role.sql:11](../drizzle/0002_crm_app_role.sql#L11), [0004_multi_tenant.sql:114](../drizzle/0004_multi_tenant.sql#L114)); [manual_harden_tenant_isolation.sql](../drizzle/manual_harden_tenant_isolation.sql) dice que el RLS por tenant "es un paso aparte, posterior". Revisé las 31 API routes y las 17 familias de server actions: todas autorizan y toman la organización de la sesión, y no encontré consultas expuestas sin filtro. Las consultas por `id` sin organización que aparecen son continuaciones internas sobre filas ya validadas.
+- **Evidencia:** todas las políticas para `crm_app` son `USING (true) WITH CHECK (true)` ([drizzle/0002_crm_app_role.sql:11](../../drizzle/0002_crm_app_role.sql#L11), [0004_multi_tenant.sql:114](../../drizzle/0004_multi_tenant.sql#L114)); [manual_harden_tenant_isolation.sql](../../drizzle/manual_harden_tenant_isolation.sql) dice que el RLS por tenant "es un paso aparte, posterior". Revisé las 31 API routes y las 17 familias de server actions: todas autorizan y toman la organización de la sesión, y no encontré consultas expuestas sin filtro. Las consultas por `id` sin organización que aparecen son continuaciones internas sobre filas ya validadas.
 - **Estado:** Verificado (el diseño); no se encontró una fuga explotable hoy.
 - **Severidad:** Alta (la probabilidad crece con cada función nueva: hay más de 50 tablas y el código lo escribe en parte un asistente).
 - **Impacto:** una sola consulta nueva sin `organization_id` expone contactos o conversaciones de otro cliente, sin error visible.
@@ -115,7 +115,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-05 · La delegación expone datos personales a toda la red sin control — Seg/Privacidad
 
-- **Evidencia:** [src/lib/delegations/flow.ts](../src/lib/delegations/flow.ts): `targetOrganizationId` nunca se completa al crear, así que toda solicitud queda abierta a la red; se usa siempre `nets[0]` (línea 81); `takeDelegation` (línea 178) la toma el primero; el nombre del contacto viaja siempre y el historial/teléfono según `scope`. Crear y tomar solo exige `authorizeAction()` (cualquier agente, no admin) en [conversaciones/actions.ts](../src/app/(app)/conversaciones/actions.ts). La `note` es texto libre visible para todas las inmobiliarias de la red antes de tomarla.
+- **Evidencia:** [src/lib/delegations/flow.ts](../../src/lib/delegations/flow.ts): `targetOrganizationId` nunca se completa al crear, así que toda solicitud queda abierta a la red; se usa siempre `nets[0]` (línea 81); `takeDelegation` (línea 178) la toma el primero; el nombre del contacto viaja siempre y el historial/teléfono según `scope`. Crear y tomar solo exige `authorizeAction()` (cualquier agente, no admin) en [conversaciones/actions.ts](../../src/app/(app)/conversaciones/actions.ts). La `note` es texto libre visible para todas las inmobiliarias de la red antes de tomarla.
 - **Estado:** Verificado. **Severidad:** Alta.
 - **Impacto:** datos personales de un contacto pasan a otra empresa sin consentimiento del contacto ni aprobación de un responsable. En Argentina la cesión de datos personales a terceros requiere consentimiento (Ley 25.326). Riesgo legal y comercial (una inmobiliaria pierde un cliente a manos de otra por un clic de un agente).
 - **Escenario:** un agente delega con una nota "Juan Pérez, 11-xxxx, busca 3 amb en Palermo"; cualquier agente de cualquier inmobiliaria de la red ve la nota y toma el contacto.
@@ -125,7 +125,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-06 · No se puede suspender ni dar de baja una inmobiliaria, ni exportar sus datos — Op/Comercial
 
-- **Evidencia:** `organizations.status` existe pero no se lee en ninguna parte del código (solo se lista en [agency/queries.ts:45](../src/lib/agency/queries.ts#L45)). El webhook enruta por cuenta sin mirar el estado de la organización ([ingest.ts](../src/lib/inbox/ingest.ts)); el triaje tampoco ([run.ts](../src/lib/agent/triage/run.ts)). No hay exportación de contactos, conversaciones ni propiedades.
+- **Evidencia:** `organizations.status` existe pero no se lee en ninguna parte del código (solo se lista en [agency/queries.ts:45](../../src/lib/agency/queries.ts#L45)). El webhook enruta por cuenta sin mirar el estado de la organización ([ingest.ts](../../src/lib/inbox/ingest.ts)); el triaje tampoco ([run.ts](../../src/lib/agent/triage/run.ts)). No hay exportación de contactos, conversaciones ni propiedades.
 - **Estado:** Verificado. **Severidad:** Alta.
 - **Impacto:** un cliente que no paga sigue recibiendo mensajes y el bot sigue gastando tokens a cuenta de la agencia. Un cliente que se va no puede llevarse sus datos y la agencia no tiene procedimiento para borrarlos.
 - **Recomendación:** estados `activa | suspendida | baja` que corten el acceso de usuarios, el bot, los barridos y la presencia en la red; "Exportar datos" (CSV/JSON de contactos, conversaciones, oportunidades, visitas, propiedades); procedimiento de baja: exportación → período de gracia → borrado o anonimización, registrado en `audit_logs`.
@@ -143,7 +143,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-08 · Conectar un canal depende de que la agencia lo asigne, y "Sincronizar" de un cliente actúa sobre todos — Op/Seg
 
-- **Evidencia:** todas las cuentas viven en un solo `ZERNIO_PROFILE_ID` ([zernio/accounts.ts](../src/lib/zernio/accounts.ts)); una cuenta nueva queda con `organizationId: null` (línea 72) hasta que la agencia la asigna. `POST /api/accounts/sync`, accesible a cualquier admin de inmobiliaria, sincroniza todas las cuentas e importa el historial de **todas** las cuentas pendientes de **todas** las inmobiliarias ([sync/route.ts:17](../src/app/api/accounts/sync/route.ts#L17)), y devuelve el conteo global de cuentas sin asignar.
+- **Evidencia:** todas las cuentas viven en un solo `ZERNIO_PROFILE_ID` ([zernio/accounts.ts](../../src/lib/zernio/accounts.ts)); una cuenta nueva queda con `organizationId: null` (línea 72) hasta que la agencia la asigna. `POST /api/accounts/sync`, accesible a cualquier admin de inmobiliaria, sincroniza todas las cuentas e importa el historial de **todas** las cuentas pendientes de **todas** las inmobiliarias ([sync/route.ts:17](../../src/app/api/accounts/sync/route.ts#L17)), y devuelve el conteo global de cuentas sin asignar.
 - **Estado:** Verificado. **Severidad:** Media.
 - **Impacto:** fricción en el alta (el cliente conecta y "no pasa nada" hasta que alguien de la agencia actúa); un cliente puede disparar trabajo pesado para otros y conocer un dato global.
 - **Recomendación:** un perfil de Zernio por inmobiliaria (si el plan lo permite) o un `state` firmado en el `redirect_url` del OAuth que ate la cuenta conectada a la organización que inició el flujo; acotar el sync y la importación a la organización de la sesión; dejar el sync global solo para la agencia.
@@ -152,7 +152,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-09 · El trabajo en segundo plano vive en el proceso: un reinicio pierde respuestas — Op
 
-- **Evidencia:** el triaje corre en `after()` con una espera de 5 s ([webhooks/zernio/route.ts:42](../src/app/api/webhooks/zernio/route.ts#L42)). El barrido `GET /api/webhooks/zernio` solo reprocesa eventos sin `processed_at`; un mensaje ya ingerido cuyo triaje se perdió no tiene barrido. Las campañas también corren en `after()` ([campanas/actions.ts:99](../src/app/(app)/contactos/campanas/actions.ts#L99)).
+- **Evidencia:** el triaje corre en `after()` con una espera de 5 s ([webhooks/zernio/route.ts:42](../../src/app/api/webhooks/zernio/route.ts#L42)). El barrido `GET /api/webhooks/zernio` solo reprocesa eventos sin `processed_at`; un mensaje ya ingerido cuyo triaje se perdió no tiene barrido. Las campañas también corren en `after()` ([campanas/actions.ts:99](../../src/app/(app)/contactos/campanas/actions.ts#L99)).
 - **Estado:** Verificado (diseño); frecuencia **no evaluable** sin logs de producción.
 - **Impacto:** cada redespliegue o caída deja sin respuesta a quien escribió en esos segundos, sin aviso a nadie. Con más clientes, más mensajes caen en esa ventana.
 - **Recomendación:** cola persistente en Postgres (tabla de trabajos con lease, como ya existe para Google Calendar en `calendar_sync_jobs`); barrido que tome mensajes entrantes sin `message_triage` dentro de la ventana de vigencia; parada ordenada del contenedor (esperar los `after()` en curso).
@@ -161,7 +161,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-10 · El costo por cliente está incompleto y no hay tope de gasto por inmobiliaria — Op/Comercial
 
-- **Evidencia:** solo la Decisions API guarda `costUsd` ([ai/decisions.ts:115](../src/lib/ai/decisions.ts#L115)); las llamadas de chat (redacción y extracción, las más caras) guardan tokens pero no costo ([ai/openrouter.ts:77](../src/lib/ai/openrouter.ts#L77)). El tope "global" `AGENT_MAX_REPLIES_PER_HOUR` en realidad se cuenta por inmobiliaria ([run.ts:305](../src/lib/agent/triage/run.ts#L305)), así que con N clientes el máximo real es N × 300 por hora. No hay presupuesto mensual por cliente.
+- **Evidencia:** solo la Decisions API guarda `costUsd` ([ai/decisions.ts:115](../../src/lib/ai/decisions.ts#L115)); las llamadas de chat (redacción y extracción, las más caras) guardan tokens pero no costo ([ai/openrouter.ts:77](../../src/lib/ai/openrouter.ts#L77)). El tope "global" `AGENT_MAX_REPLIES_PER_HOUR` en realidad se cuenta por inmobiliaria ([run.ts:305](../../src/lib/agent/triage/run.ts#L305)), así que con N clientes el máximo real es N × 300 por hora. No hay presupuesto mensual por cliente.
 - **Estado:** Verificado. **Severidad:** Media.
 - **Impacto:** no se puede cobrar por uso ni detectar un cliente que consume de más; un ataque de mensajes a varios clientes no tiene techo total.
 - **Recomendación:** guardar el costo de cada llamada (OpenRouter lo devuelve en `usage`, o calcularlo con una tabla de precios); presupuesto mensual por inmobiliaria con aviso al 80% y corte del bot al 100%; renombrar el tope por organización y agregar un tope global real.
@@ -170,7 +170,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-11 · Límites de uso e intentos de login en memoria — Seg/Op
 
-- **Evidencia:** [rate-limit.ts:3](../src/lib/rate-limit.ts#L3) usa un `Map` en memoria.
+- **Evidencia:** [rate-limit.ts:3](../../src/lib/rate-limit.ts#L3) usa un `Map` en memoria.
 - **Estado:** Verificado. **Severidad:** Media.
 - **Impacto:** cada reinicio reinicia los contadores de fuerza bruta; con dos réplicas los límites se duplican. Hoy hay una réplica, así que el riesgo es acotado.
 - **Recomendación:** mover los límites de login, recuperación y API a Postgres (tabla con ventana) o Redis antes de escalar a más de un contenedor. Sumar la protección de Supabase Auth (CAPTCHA) en login y recuperación.
@@ -188,7 +188,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-13 · Cualquier agente puede publicar una propiedad en internet — Seg/Proceso
 
-- **Evidencia:** `publishProperty` usa `authorizeAction()` (cualquier rol) en [publicacion-actions.ts:20](../src/app/(app)/propiedades/publicacion-actions.ts#L20); solo la marca exige admin.
+- **Evidencia:** `publishProperty` usa `authorizeAction()` (cualquier rol) en [publicacion-actions.ts:20](../../src/app/(app)/propiedades/publicacion-actions.ts#L20); solo la marca exige admin.
 - **Estado:** Verificado. **Severidad:** Media.
 - **Impacto:** una ficha pública con precio o fotos que la inmobiliaria no autorizó queda indexable en buscadores.
 - **Recomendación:** publicar solo admin, o agente con aprobación de un admin; registrar quién publicó en `audit_logs`.
@@ -206,7 +206,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-15 · Usuarios sin fila de membresía entran igual — Seg
 
-- **Evidencia:** [auth.ts:64](../src/lib/auth.ts#L64): "Sin fila de membresía se deja pasar".
+- **Evidencia:** [auth.ts:64](../../src/lib/auth.ts#L64): "Sin fila de membresía se deja pasar".
 - **Estado:** Potencial (depende de si quedan cuentas antiguas sin fila).
 - **Severidad:** Baja-Media.
 - **Impacto:** a esas cuentas no se las puede suspender por `organization_members`.
@@ -215,7 +215,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 
 ### H-16 · Suspender en una inmobiliaria bloquea la cuenta en todas — Op
 
-- **Evidencia:** [agency/users.ts:169](../src/lib/agency/users.ts#L169) usa `ban_duration` en Auth, que es global.
+- **Evidencia:** [agency/users.ts:169](../../src/lib/agency/users.ts#L169) usa `ban_duration` en Auth, que es global.
 - **Estado:** Verificado. **Severidad:** Baja (hoy un usuario pertenece a una sola inmobiliaria).
 - **Recomendación:** si se habilitan usuarios en varias inmobiliarias, suspender solo por membresía.
 - **Esfuerzo:** Bajo.
@@ -223,7 +223,7 @@ Orden: primero lo que bloquea vender, después operación, después mejoras. "Se
 ### Menores (Baja)
 
 - **Contador de vistas de fichas públicas** sin filtrar robots ni repeticiones: métricas infladas para el cliente. *Verificado.*
-- **CSP con `'unsafe-inline'` en scripts** ([next.config.ts](../next.config.ts)): aceptado y documentado; reemplazar por nonces cuando haya contenido de terceros en las páginas. *Verificado.*
+- **CSP con `'unsafe-inline'` en scripts** ([next.config.ts](../../next.config.ts)): aceptado y documentado; reemplazar por nonces cuando haya contenido de terceros en las páginas. *Verificado.*
 - **Envío que expira por la red** (`deliverMessage`): si Zernio llegó a enviar pero la respuesta no volvió, la fila queda `failed` y reintentar crea otra con otra `Idempotency-Key` → posible duplicado. *Potencial.*
 - **Tablas `legacy_*`** del bot anterior siguen en la base. *Verificado en migraciones.*
 

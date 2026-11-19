@@ -11,13 +11,14 @@ import { safeError } from "@/lib/safe-error";
 // - Un trabajo `running` cuyo lease venció (el proceso murió) vuelve a ser reclamable.
 // - Un fallo reintenta con espera creciente; al agotar `maxAttempts` queda `dead` y visible.
 
-export type JobKind = "triage" | "campaign" | "account_import";
+export type JobKind = "triage" | "campaign" | "account_import" | "media_store";
 export type Job = typeof jobs.$inferSelect;
 
 export const LEASE_MS: Record<JobKind, number> = {
   triage: 4 * 60_000, // compone + envía: cubre la espera de los modelos con margen
   campaign: 10 * 60_000, // un tramo de envío con presupuesto de tiempo propio (ver campaigns/run.ts)
   account_import: 15 * 60_000,
+  media_store: 5 * 60_000, // hasta 10 adjuntos de 25 MB cada uno
 };
 
 export type EnqueueInput = {

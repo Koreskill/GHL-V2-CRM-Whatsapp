@@ -1,13 +1,14 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { agentConfigs, agentConfigVersions } from "@/db/schema";
+import { parseReplyDelay } from "./config";
 import { parseFirstReplies } from "./first-replies";
 
 // Versionado de la configuración del agente. Cada guardado deja una versión inmutable con TODO lo que
 // define el comportamiento de ese canal (prompt, modelo, modo de envío, umbrales). Restaurar copia una
 // versión vieja sobre la actual, y eso deja a su vez una versión nueva: el historial nunca se reescribe.
 
-const FIELDS = ["enabled", "systemPrompt", "model", "enabledTools", "autoReply", "minConfidence", "humanThreshold", "decisionModel", "firstReplies"] as const;
+const FIELDS = ["enabled", "systemPrompt", "model", "enabledTools", "autoReply", "minConfidence", "humanThreshold", "decisionModel", "firstReplies", "replyDelaySeconds"] as const;
 
 export async function recordVersion(orgId: string, scope: string, userId: string, note: string | null) {
   const db = getDb();
@@ -60,6 +61,7 @@ export async function restoreVersion(orgId: string, scope: string, versionId: st
     decisionModel: str("decisionModel"),
     // Las versiones anteriores al guion no traen el campo: restaurarlas no debe borrar el que hay hoy.
     ...("firstReplies" in s ? { firstReplies: parseFirstReplies(s.firstReplies) } : {}),
+    ...("replyDelaySeconds" in s ? { replyDelaySeconds: parseReplyDelay(s.replyDelaySeconds) } : {}),
   };
   await db
     .insert(agentConfigs)

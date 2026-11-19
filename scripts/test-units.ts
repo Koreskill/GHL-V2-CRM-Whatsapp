@@ -48,6 +48,7 @@ const row = (
   humanThreshold: p.humanThreshold ?? null,
   decisionModel: p.decisionModel ?? null,
   firstReplies: null,
+  replyDelaySeconds: null,
   updatedAt: new Date(),
 });
 const global = row("global", { enabled: true, systemPrompt: "GLOBAL", model: "gpt-global", enabledTools: [] });

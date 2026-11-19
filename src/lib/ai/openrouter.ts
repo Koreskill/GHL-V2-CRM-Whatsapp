@@ -13,7 +13,7 @@ import { safeError } from "@/lib/safe-error";
 // nunca directo al proveedor desde la automatización, y siempre se registra en ai_usage_logs.
 const BASE_URL = "https://openrouter.ai/api/v1";
 
-export type AiFunction = "conversacional" | "extraccion" | "calificacion" | "fallback";
+export type AiFunction = "conversacional" | "extraccion" | "calificacion" | "fallback" | "transcripcion" | "vision";
 
 export function openrouterConfigured() {
   return Boolean(process.env.OPENROUTER_API_KEY);

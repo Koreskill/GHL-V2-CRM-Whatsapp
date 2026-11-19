@@ -6,7 +6,7 @@ import { claimDue, completeJob, failJob, rescheduleJob, skipJob, type Job, type 
 // atómico, así que conviven sin pisarse (y con varias réplicas también).
 //
 // Concurrencia por tipo, para que una campaña grande no demore las respuestas del bot:
-const MAX_INFLIGHT: Record<JobKind, number> = { triage: 4, campaign: 2, account_import: 1 };
+const MAX_INFLIGHT: Record<JobKind, number> = { triage: 4, campaign: 2, account_import: 1, media_store: 2 };
 const TICK_MS = 2_000;
 const FOLLOWUPS_EVERY_MS = 60_000;
 
@@ -22,6 +22,7 @@ const HANDLERS: Record<JobKind, Handler> = {
   triage: async (job) => (await import("./handlers")).handleTriage(job),
   campaign: async (job) => (await import("./handlers")).handleCampaign(job),
   account_import: async (job) => (await import("./handlers")).handleAccountImport(job),
+  media_store: async (job) => (await import("./handlers")).handleMediaStore(job),
 };
 
 const state = globalThis as unknown as {
@@ -31,7 +32,7 @@ const state = globalThis as unknown as {
 function worker() {
   return (state.__jobsWorker ??= {
     timer: null,
-    inflight: { triage: 0, campaign: 0, account_import: 0 },
+    inflight: { triage: 0, campaign: 0, account_import: 0, media_store: 0 },
     lastFollowups: 0,
     ticking: false,
     stopping: false,

@@ -1,6 +1,6 @@
 # Registro de implementación — operación, campañas y seguimientos
 
-Fecha: 2026-10-20 · Rama: `feat/operacion-campanas-seguimientos` · Base: auditoría del 2026-10-19 ([auditoria-integral-2026-10-19.md](auditoria-integral-2026-10-19.md)).
+Fecha: 2026-10-20 · Rama: `feat/operacion-campanas-seguimientos` · Base: auditoría del 2026-10-19 ([2026-10-19-auditoria-integral.md](2026-10-19-auditoria-integral.md)).
 
 ## 0. Antes de desplegar (obligatorio)
 

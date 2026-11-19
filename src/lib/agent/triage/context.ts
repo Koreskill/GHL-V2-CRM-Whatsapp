@@ -1,6 +1,8 @@
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { readAttribution, type AdOrigin } from "@/lib/inbox/attribution";
+import { loadDerivations, type DerivationKind } from "@/lib/inbox/derivations";
+import { derivedForPrompt } from "@/lib/inbox/media";
 import {
   contacts,
   conversations,
@@ -113,7 +115,7 @@ export async function buildTriageContext(input: {
   const [history, contact, dealRow, [convRow], [outbound]] = await Promise.all([
     // Historial de ESTA conversación, no del contacto: no se mezcla WhatsApp con Instagram.
     db
-      .select({ direction: messages.direction, body: messages.body, type: messages.type })
+      .select({ id: messages.id, direction: messages.direction, body: messages.body, type: messages.type })
       .from(messages)
       .where(
         and(
@@ -254,6 +256,14 @@ export async function buildTriageContext(input: {
 
   const req = requirement[0] ?? null;
 
+  // Audios e imágenes de la persona, ya leídos por un modelo: el agente los ve como texto, marcados como lectura automática.
+  const derived = await loadDerivations(organizationId, history.map((m) => m.id)).catch(() => new Map<string, { kind: DerivationKind; text: string; model: string | null }>());
+  const textOf = (m: (typeof history)[number]) => {
+    const d = derived.get(m.id);
+    const read = d ? derivedForPrompt(d.kind, d.text) : null;
+    return m.body ? [m.body, read].filter(Boolean).join("\n") : (read ?? `[${m.type}]`);
+  };
+
   return {
     organizationId,
     conversationId,
@@ -264,7 +274,7 @@ export async function buildTriageContext(input: {
       .reverse()
       .map((m) => ({
         de: m.direction === "inbound" ? ("contacto" as const) : ("inmobiliaria" as const),
-        texto: (m.body ?? `[${m.type}]`).slice(0, MAX_CHARS),
+        texto: textOf(m).slice(0, MAX_CHARS),
       })),
     oportunidad: deal
       ? {

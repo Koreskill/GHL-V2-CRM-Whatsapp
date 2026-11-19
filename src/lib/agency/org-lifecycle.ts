@@ -117,6 +117,22 @@ export async function anonymizeOrganization(orgId: string, typedName: string): P
 
   // Fuera de la transacción (es otra API): se limpia el rol de Auth de cada usuario cuya organización era esta.
   counts.usuarios = await revokeAuthMembers(orgId);
+  // Audios, fotos y archivos guardados (media-store.ts) son datos personales: se borran todos. Si falla, queda
+  // un incidente para reintentarlo; la anonimización de la base ya está hecha.
+  try {
+    const { deleteOrgMedia } = await import("@/lib/inbox/media-store");
+    counts.adjuntos = await deleteOrgMedia(orgId);
+  } catch (err) {
+    const { reportIncident } = await import("@/lib/incidents/report");
+    await reportIncident({
+      organizationId: null,
+      module: "mensajeria",
+      key: `medios-anonimizar:${orgId}`,
+      message: "No se pudieron borrar los adjuntos guardados de una inmobiliaria eliminada: borrarlos a mano del bucket mensajes-medios",
+      detail: err,
+      context: { organizationId: orgId },
+    });
+  }
   return { ok: true, detail: counts };
 }
 

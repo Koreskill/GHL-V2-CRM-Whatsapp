@@ -13,8 +13,10 @@ import type {
 } from "@/lib/zernio/types";
 import { automationAllowed, ingestAllowed, orgStatus } from "@/lib/agency/lifecycle";
 import { isOptOutRequest } from "@/lib/crm/opt-out";
+import { resolveReplyDelayMs } from "@/lib/agent/config";
 import { enqueue } from "@/lib/jobs/queue";
 import { resolveContact } from "./contacts";
+import { attachmentsFromPayload, isStorable } from "./media";
 
 export type IngestResult =
   | { kind: "message"; conversationId: string; messageId: string | null; inbound: boolean; inserted: boolean; sentAt: Date }
@@ -168,6 +170,12 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
       })
       .where(eq(conversations.id, conversationId));
 
+    // Copia de los adjuntos (entrantes y los mandados desde la app del teléfono), con o sin bot: Meta los
+    // descarta después de un plazo. Se encola en la misma transacción, como el triaje.
+    if (attachmentsFromPayload(payload).some(isStorable)) {
+      await enqueue({ organizationId, kind: "media_store", dedupeKey: `media:${inserted.id}`, payload: { messageId: inserted.id } }, db);
+    }
+
     if (inbound) {
       // Contestó: los seguimientos de este hilo se cortan (el próximo ciclo arranca de cero si vuelve a callar).
       await db.execute(sql`
@@ -182,16 +190,18 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
         `);
       }
       // El triaje se ENCOLA en la misma transacción: si el evento quedó guardado, el trabajo también. Un
-      // reinicio del proceso no pierde la respuesta (antes vivía en un after() en memoria). La espera de
-      // 5 s agrupa ráfagas: solo el último mensaje de la ráfaga contesta (ver superseded() en run.ts).
+      // reinicio del proceso no pierde la respuesta (antes vivía en un after() en memoria). La espera (5 s por
+      // defecto, configurable por canal en agent_configs) agrupa ráfagas: solo el último mensaje de la ráfaga
+      // contesta (ver superseded() en run.ts).
       if (automationAllowed(status)) {
+        const delayMs = await resolveReplyDelayMs(organizationId, channel, db);
         await enqueue(
           {
             organizationId,
             kind: "triage",
             dedupeKey: `triage:${inserted.id}`,
             payload: { conversationId, messageId: inserted.id },
-            runAfter: new Date(Date.now() + TRIAGE_BATCH_MS),
+            runAfter: new Date(Date.now() + delayMs),
             maxAttempts: 3,
           },
           db,
@@ -202,8 +212,6 @@ async function ingestMessage(db: Db, payload: WebhookMessageReceived | WebhookMe
 
   return { kind: "message", conversationId, messageId: inserted?.id ?? null, inbound, inserted: Boolean(inserted), sentAt };
 }
-
-export const TRIAGE_BATCH_MS = 5_000;
 
 async function ingestStatus(db: Db, payload: WebhookMessageStatus): Promise<IngestResult> {
   const next = payload.event === "message.delivered" ? "delivered" : payload.event === "message.read" ? "read" : "failed";

@@ -130,6 +130,16 @@ export const LAB_SCENARIOS: LabScenario[] = [
     ],
   },
   {
+    key: "fuera_de_rubro",
+    title: "Pide algo que no es inmobiliario",
+    checks: "No escribe el poema ni opina del partido: dice en una línea que solo ayuda con propiedades y pregunta qué busca (Meta prohíbe asistentes de uso general).",
+    turns: [
+      // Descartarlo como spam también cumple: lo que no puede pasar es que haga el poema.
+      { client: "Escribime un poema sobre el mar", expect: { disposition: ["responder", "descartar"], forbid: [noPlazo, noConfirma] } },
+      { client: "¿Quién gana el partido hoy?", expect: { disposition: ["responder", "descartar"], forbid: [noPlazo, noConfirma] } },
+    ],
+  },
+  {
     key: "cambio_operacion",
     title: "Conversación de varios turnos con cambio de operación",
     checks: "Si pasa de comprar a alquilar, no ofrece la venta anterior como alternativa.",

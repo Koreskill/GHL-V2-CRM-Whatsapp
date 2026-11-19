@@ -18,7 +18,7 @@ import { Button, Card, PageHeader } from "@/components/ui/primitives";
 import { getDb } from "@/db";
 import { agentConfigs, channelAccounts } from "@/db/schema";
 import { requireRole } from "@/lib/auth";
-import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "@/lib/agent/config";
+import { DEFAULT_MODEL, DEFAULT_REPLY_DELAY_SECONDS, DEFAULT_SYSTEM_PROMPT, mergeAgentConfig } from "@/lib/agent/config";
 import { DEFAULT_FIRST_STEPS, MAX_FIRST_STEPS, MAX_STEP_CHARS, parseFirstReplies } from "@/lib/agent/first-replies";
 import { cn } from "@/lib/utils";
 import { saveAgentConfig, savePipelineColors } from "./actions";
@@ -314,6 +314,24 @@ export default async function ConfiguracionPage({ searchParams }: PageProps<"/co
                 />
                 <p className="mt-1.5 text-[12px] text-muted">
                   Cuánta señal de «esto lo tiene que ver una persona» alcanza para derivar. Más bajo, más cauto.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="replyDelay" className="block text-[13.5px] font-medium text-ink">
+                  Espera antes de responder (segundos)
+                </label>
+                <input
+                  id="replyDelay"
+                  name="replyDelay"
+                  inputMode="numeric"
+                  defaultValue={row?.replyDelaySeconds ?? ""}
+                  placeholder={String("replyDelaySeconds" in inherited ? inherited.replyDelaySeconds : DEFAULT_REPLY_DELAY_SECONDS)}
+                  className="mt-1.5 h-10 w-full rounded-lg border border-line bg-field px-3 text-[13.5px] text-ink placeholder:text-muted/70 focus:border-primary focus:outline-none"
+                />
+                <p className="mt-1.5 text-[12px] text-muted">
+                  De 0 a 60. Si la persona manda varios mensajes seguidos (o un audio y después texto), el agente espera este
+                  tiempo desde el último y contesta una sola vez.
                 </p>
               </div>
             </div>

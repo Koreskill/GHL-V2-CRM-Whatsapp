@@ -183,6 +183,13 @@
       "when": 1792617215180,
       "tag": "0025_primeras_respuestas",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794826069259,
+      "tag": "0026_medios_entrantes",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import { getDb } from "@/db";
 import { agentConfigs, organizations } from "@/db/schema";
 import { DEAL_STAGES } from "@/lib/pipeline";
 import { isPresetId } from "@/lib/pipeline-colors";
+import { parseReplyDelay } from "@/lib/agent/config";
 import { MAX_FIRST_STEPS, MAX_STEP_CHARS } from "@/lib/agent/first-replies";
 import { TOOL_NAMES } from "@/lib/agent/tools";
 import { requireRole } from "@/lib/auth";
@@ -45,6 +46,8 @@ export async function saveAgentConfig(formData: FormData) {
   };
   const minConfidence = ratio("minConfidence");
   const humanThreshold = ratio("humanThreshold");
+  // Espera antes de responder (0 a 60 s). Vacío = hereda; el 0 es un valor válido.
+  const replyDelaySeconds = parseReplyDelay(formData.get("replyDelay"));
   const decisionModelRaw = String(formData.get("decisionModel") ?? "").trim();
   const decisionModel = decisionModelRaw && MODEL_RE.test(decisionModelRaw) ? decisionModelRaw : null;
 
@@ -76,6 +79,7 @@ export async function saveAgentConfig(formData: FormData) {
       humanThreshold,
       decisionModel,
       firstReplies,
+      replyDelaySeconds,
     })
     .onConflictDoUpdate({
       target: [agentConfigs.organizationId, agentConfigs.scope],
@@ -89,6 +93,7 @@ export async function saveAgentConfig(formData: FormData) {
         humanThreshold,
         decisionModel,
         firstReplies,
+        replyDelaySeconds,
         updatedAt: sql`now()`,
       },
     });

@@ -11,6 +11,9 @@ import {
   type TriageStatus,
 } from "@/db/schema";
 import { canAutomate } from "@/lib/agency/lifecycle";
+import { OPT_OUT_ACK, isOptOutRequest } from "@/lib/crm/opt-out";
+import { deriveEarlierMedia, deriveMessage, firstReadable, type Derivation } from "@/lib/inbox/derivations";
+import { attachmentsFromPayload, MEDIA_WITH_ARTICLE } from "@/lib/inbox/media";
 import { reportIncident } from "@/lib/incidents/report";
 import { deliverMessage } from "@/lib/inbox/deliver";
 import { computeWindow } from "@/lib/inbox/window";
@@ -18,6 +21,7 @@ import { clearAgentTyping, setAgentTyping } from "@/lib/inbox/typing";
 import { safeError } from "@/lib/safe-error";
 import { resolveAgentConfig } from "../config";
 import { composeReply, DEFAULT_DECISION_MODEL, type ComposeResult } from "./compose";
+import { planIncoming, unusableAck, unusableReason, type IncomingPlan } from "./incoming";
 import { markPropertyShown } from "./tags";
 import { DEFAULT_POLICY, type RoutingPolicy } from "./routes";
 
@@ -295,11 +299,78 @@ function persistable(c: ComposeResult) {
   };
 }
 
+/**
+ * El mensaje trae un medio que no se pudo usar (un video, un audio que falló o no se entiende…). No se pierde:
+ * queda en la campanita con el motivo y, en modo automático, la persona recibe un acuse fijo. NO se pausa la IA:
+ * si después escribe texto, el agente lo atiende; es el medio lo que tiene que ver una persona.
+ */
+async function answerUnusableMedia(input: {
+  conv: typeof conversations.$inferSelect;
+  triageId: string;
+  triggerId: string;
+  plan: Extract<IncomingPlan, { kind: "unusable" }>;
+  autoReply: Policy["autoReply"];
+}): Promise<TriageResult> {
+  const { conv, triageId, triggerId, plan } = input;
+  // Un sticker no es una consulta: se registra y no se molesta a nadie.
+  if (plan.media === "sticker") {
+    await finish(triageId, { status: "descartado", error: null, routeReason: "Sticker: no requiere respuesta" });
+    return { status: "descartado", triageId };
+  }
+
+  // Una falla del sistema (descarga, modelo caído) es un incidente; "no se entiende el audio" no lo es.
+  if (plan.failed && !plan.unreadable) {
+    await reportIncident({
+      organizationId: conv.organizationId,
+      module: "agente",
+      key: `medios:${plan.media}`,
+      message: `No se pudo leer ${MEDIA_WITH_ARTICLE[plan.media]} que mandó un contacto`,
+      detail: plan.error ?? "sin detalle",
+      severity: "advertencia",
+      context: { channel: conv.channel },
+    });
+  }
+
+  let ackId: string | null = null;
+  const ack = unusableAck(plan.media);
+  if (input.autoReply === "auto" && ack) {
+    const sent = await deliverMessage(conv.id, { text: ack, source: "agent", organizationId: conv.organizationId, idempotencyKey: `media-ack:${triggerId}` });
+    if (sent.ok) ackId = sent.message.id;
+  }
+  const reason = unusableReason(plan);
+  await finish(triageId, { status: "derivado", routeReason: reason, handoffReason: reason, sentMessageId: ackId, error: null });
+  return { status: "derivado", triageId };
+}
+
+/** Pidió la baja de mensajes comerciales por audio: se marca al contacto y se confirma, sin pasar por el modelo. */
+async function answerAudioOptOut(input: {
+  conv: typeof conversations.$inferSelect;
+  triageId: string;
+  triggerId: string;
+  autoReply: Policy["autoReply"];
+}): Promise<TriageResult> {
+  const { conv, triageId, triggerId } = input;
+  if (conv.contactId) {
+    await getDb().execute(sql`
+      update contacts set marketing_opt_out_at = coalesce(marketing_opt_out_at, now()),
+        marketing_opt_out_source = coalesce(marketing_opt_out_source, 'audio'), updated_at = now()
+      where id = ${conv.contactId} and organization_id = ${conv.organizationId}
+    `);
+  }
+  let ackId: string | null = null;
+  if (input.autoReply === "auto") {
+    const sent = await deliverMessage(conv.id, { text: OPT_OUT_ACK, source: "agent", organizationId: conv.organizationId, idempotencyKey: `optout:${triggerId}` });
+    if (sent.ok) ackId = sent.message.id;
+  }
+  await finish(triageId, { status: "descartado", routeReason: "Pidió la baja de mensajes comerciales por audio", sentMessageId: ackId, error: null });
+  return { status: "descartado", triageId };
+}
+
 export async function triageIncomingMessage(conversationId: string, opts: { triggerMessageId: string }): Promise<TriageResult> {
   const db = getDb();
 
   const [trigger] = await db
-    .select({ id: messages.id, sentAt: messages.sentAt, direction: messages.direction, body: messages.body })
+    .select({ id: messages.id, sentAt: messages.sentAt, direction: messages.direction, body: messages.body, rawPayload: messages.rawPayload })
     .from(messages)
     .where(and(eq(messages.id, opts.triggerMessageId), eq(messages.conversationId, conversationId)));
   if (!trigger || trigger.direction !== "inbound") return { status: "skipped", reason: "trigger_not_found" };
@@ -332,8 +403,10 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
   if (computeWindow(conv.channel, conv.lastInboundAt).state !== "open") return { status: "skipped", reason: "window_closed" };
   if (await superseded(conversationId, trigger)) return { status: "skipped", reason: "superseded" };
 
-  const text = trigger.body?.trim();
-  if (!text) return { status: "skipped", reason: "empty_message" };
+  // Un mensaje sin texto pero con un adjunto (audio, foto…) NO se descarta: se lee más abajo, o queda para una persona.
+  const caption = trigger.body?.trim() ?? "";
+  const media = attachmentsFromPayload(trigger.rawPayload);
+  if (!caption && media.length === 0) return { status: "skipped", reason: "empty_message" };
 
   // Topes de gasto antes de llamar a ningún modelo.
   // Tres topes: por conversación, por inmobiliaria y GLOBAL (todas juntas). Antes el "global" se contaba
@@ -365,6 +438,29 @@ export async function triageIncomingMessage(conversationId: string, opts: { trig
   await setAgentTyping(conversationId, conv.organizationId, db);
 
   try {
+    // ── Medios: leer el audio o la imagen ANTES de clasificar ──
+    let text = caption;
+    // Los medios de mensajes ANTERIORES de la ráfaga, siempre: un audio seguido de un texto genera dos trabajos pero
+    // solo contesta el del texto, y ese tiene que ver lo que decía el audio. Sin medios pendientes no hace nada.
+    await deriveEarlierMedia({ organizationId: conv.organizationId, conversationId, exceptMessageId: trigger.id }).catch(() => {});
+    if (media.length) {
+      const readable = firstReadable(trigger.rawPayload);
+      let read: Derivation | null = null;
+      if (readable) {
+        read = await deriveMessage({ organizationId: conv.organizationId, conversationId, messageId: trigger.id, rawPayload: trigger.rawPayload });
+      }
+      const plan = planIncoming({ caption, media, read });
+
+      if (plan.kind === "unusable") {
+        return await answerUnusableMedia({ conv, triageId, triggerId: trigger.id, plan, autoReply: policy.autoReply });
+      }
+      // Pidió la baja por audio: se respeta igual que si la hubiera escrito.
+      if (plan.transcript && isOptOutRequest(plan.transcript)) {
+        return await answerAudioOptOut({ conv, triageId, triggerId: trigger.id, autoReply: policy.autoReply });
+      }
+      text = plan.text;
+    }
+
     const composed = await composeReply({
       organizationId: conv.organizationId,
       conversationId,

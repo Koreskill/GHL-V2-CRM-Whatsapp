@@ -60,6 +60,9 @@ export const aiFunctionEnum = pgEnum("ai_function", [
   "extraccion",
   "calificacion",
   "fallback",
+  // Medios entrantes: pasar un audio a texto y describir una imagen (ver lib/ai/media.ts).
+  "transcripcion",
+  "vision",
 ]);
 export const aiCallStatusEnum = pgEnum("ai_call_status", ["ok", "error", "timeout"]);
 // Fase 5 — Matching
@@ -383,6 +386,31 @@ export const messages = pgTable(
   ],
 );
 
+// Lo que un modelo leyó de un medio entrante (la transcripción de un audio, la descripción de una imagen).
+// Vive APARTE del mensaje: el original (raw_payload) no se toca y lo derivado se muestra como lectura
+// automática, con su modelo, para que una persona la pueda corregir o descartar.
+export const messageDerivations = pgTable(
+  "message_derivations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    // transcripcion | descripcion_imagen
+    kind: text("kind").notNull(),
+    // ok | error. Un error queda registrado para no gastar dos veces en el mismo archivo.
+    status: text("status").notNull(),
+    text: text("text"),
+    model: text("model"),
+    error: text("error"), // sin datos personales (safeError)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("message_derivations_message_key").on(t.messageId)],
+);
+
 export const agentConfigs = pgTable(
   "agent_configs",
   {
@@ -408,6 +436,9 @@ export const agentConfigs = pgTable(
     decisionModel: text("decision_model"),
     // Guion de las primeras respuestas (ver lib/agent/first-replies.ts). Null = hereda de 'global'.
     firstReplies: jsonb("first_replies").$type<{ enabled: boolean; appliesTo: "anuncios" | "todas"; steps: string[] }>(),
+    // Segundos que el agente espera, desde el último mensaje de la persona, antes de contestar: así varios
+    // mensajes seguidos reciben UNA respuesta. Null = hereda de 'global' y, si tampoco está, 5.
+    replyDelaySeconds: integer("reply_delay_seconds"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow()
